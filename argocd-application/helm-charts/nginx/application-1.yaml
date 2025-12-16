@@ -10,9 +10,8 @@ spec:
   source:
     helm: 					                        # added builder name - helm
       releaseName: application-from-helm	  # added release name
-      parameters:
-        - name: "replicaCount"              # specified parameter name
-          value: "3"                        # parameter value
+      valueFiles:                           # added value files
+        - custom-values.yaml                # added custom values
     path: argocd-application/helm-charts/nginx			      # the path in the repo to the apllication manifests
     repoURL: https://github.com/entermix123/ArgoCD-Labs		# path to the argocd lab repo
     targetRevision: main					                        # we can use branch name, commit ID or tag name
