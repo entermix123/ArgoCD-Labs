@@ -10,6 +10,10 @@ spec:
   source:
     directory:                                        # use directory tool
       recurse: true                                   # enable recurse
+    # directory:
+        # exclude: 'service.yml'
+        # include: '{serviceaccount.yml,service.yml}'
+        # recurse: true
     path: argocd-application/directoryOfmanifests		# the path in the repo to the apllication manifests
     repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
     targetRevision: main
