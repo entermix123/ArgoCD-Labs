@@ -1,0 +1,15 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: application-directory                   # change the name of the application
+spec:
+  destination:
+    namespace: directory                        # change the namespace
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				
+  source:
+    directory:                                        # use directory tool
+      recurse: true                                   # enable recurse
+    path: argocd-application/directoryOfmanifests		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
+    targetRevision: main

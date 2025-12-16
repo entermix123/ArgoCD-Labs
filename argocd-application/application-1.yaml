@@ -12,6 +12,19 @@ spec:
       releaseName: application-from-helm	  # added release name
       valueFiles:                           # added value files
         - custom-values.yaml                # added custom values
+# It's possible to override helm values through different ways such as "valueFiles", "values", "valuesObject" and "parameters". 
+# Values injections have the following order of precedence parameters > valuesObject > values > valueFiles > helm repository values.yaml Or rather
+    # helm:
+    #     releaseName: application-from-helm
+    #     valueFiles:
+    #       - custom-values.yaml
+    #     values: |
+    #       replicaCount: 3
+    #     valuesObject:
+    #       replicaCount: 5
+    #     parameters:
+    #       - name: "replicaCount"
+    #         value: "1"
     path: argocd-application/helm-charts/nginx			      # the path in the repo to the apllication manifests
     repoURL: https://github.com/entermix123/ArgoCD-Labs		# path to the argocd lab repo
     targetRevision: main					                        # we can use branch name, commit ID or tag name
