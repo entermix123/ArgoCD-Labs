@@ -1,0 +1,13 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: app-resource-blacklist                  # name of the application
+spec:
+  destination:
+    namespace: default	                        # destination namespace
+    server: https://kubernetes.default.svc 	    # default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: project-resource-blacklist			
+  source:
+    path: argocd-application/helm-charts/nginx     		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
+    targetRevision: main					# use main branch as source version

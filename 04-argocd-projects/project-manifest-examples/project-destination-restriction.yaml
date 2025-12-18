@@ -1,0 +1,14 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: project-destination-restriction
+  namespace: argocd
+spec:
+  clusterResourceWhitelist:
+  - group: '*'
+    kind: '*'
+  destinations:
+  - namespace: 'dev'       ## Use '!dev' to place namespace in BlackList
+    server: '*'            ## '*' means we are allowed to use any servers
+  sourceRepos:
+  - '*'
