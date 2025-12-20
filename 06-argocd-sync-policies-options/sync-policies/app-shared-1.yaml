@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: automated-sync-shared-application-1				# change name
+spec:
+  destination:
+    namespace: automated-sync-share					# change namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    syncOptions:							# added sync option section
+    - FailOnSharedResource=true						# enabled FailOnSharedResource parameter 
+    automated: {}							# enable application automated sync

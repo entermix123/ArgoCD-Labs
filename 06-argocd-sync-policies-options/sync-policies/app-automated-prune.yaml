@@ -1,0 +1,16 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prune-application					# changed name
+spec:
+  destination:
+    namespace: prune-sync					# changed namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    automated:							# this is the prune policy
+      prune: true						# this is automated prune parameter enabled

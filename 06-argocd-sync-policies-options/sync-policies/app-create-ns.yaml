@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: application-ns-create-autosync			# change name
+spec:
+  destination:
+    namespace: create-ns					        # change namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    syncOptions:							# add sync options section
+    - CreateNamespace=true						# enable CreateNamespace parameter
+    automated: {}							# enable application automated sync
