@@ -4,19 +4,20 @@ metadata:
   name: mattermost-post-job-success
   annotations:
     argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
   template:
     spec:
       containers:
         - name: mattermost-success
-          image: mattermost-notifier:v1
-          imagePullPolicy: Never 
-          command: [ "python3", "mattermost_api.py"]
+          image: mattermost-notifier:v1           # ✅ Changed to your custom image
+          imagePullPolicy: Never                   # ✅ Added - uses local image
+          command: ["python3", "mattermost_api.py"]
           env:
           - name: message
-            value: "MESSAGE FROM ARGOCD: The last sync is:  *** Sync OK ***"
+            value: "MESSAGE FROM ARGOCD: The last sync is: ✅ Sync OK"
           - name: url
-            value: "host.docker.internal"
+            value: "host.docker.internal"          # ✅ Changed from localhost
           - name: token
             value: "ot3edzrgw7yrzxtoaxpi7hu4dw"
           - name: scheme
