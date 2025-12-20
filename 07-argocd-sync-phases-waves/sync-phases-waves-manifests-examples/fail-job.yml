@@ -15,7 +15,7 @@ spec:
           - name: message
             value: "MESSAGE FROM ARGOCD: The last sync is:  *** Sync Failed ***"
           - name: url
-            value: "localhost"
+            value: "host.docker.internal"
           - name: token
             value: "ot3edzrgw7yrzxtoaxpi7hu4dw"
           - name: scheme
