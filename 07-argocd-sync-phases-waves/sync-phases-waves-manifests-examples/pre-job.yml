@@ -4,7 +4,7 @@ metadata:
   name: health-check-pre-job
   annotations:                                                # set annotation section
     argocd.argoproj.io/hook: PreSync                          # hook for preSync phase
-    # argocd.argoproj.io/hook-delete-policy: HookFailed         # hook for sync-fail phase
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded         # added HookSucceeded policy - after success deletion
 spec:
   template:
     spec:
