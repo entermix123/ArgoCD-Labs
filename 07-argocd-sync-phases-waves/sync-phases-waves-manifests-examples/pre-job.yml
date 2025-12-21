@@ -12,6 +12,6 @@ spec:
         - name: health-check
           image: curlimages/curl
           command: ["/bin/sh", "-c"]
-          args: ["if curl -s -o /dev/null -w '%{http_code}' http://host.docker.internal:9999 | grep -q 200; then echo 'Mattermost is up and Running'; exit 0; else echo 'Mattermost is NOT accessible'; exit 1; fi"]
+          args: ["if curl -s -o /dev/null -w '%{http_code}' http://host.docker.internal:8065 | grep -q 200; then echo 'Mattermost is up and Running'; exit 0; else echo 'Mattermost is NOT accessible'; exit 1; fi"]
       restartPolicy: Never
   backoffLimit: 0
