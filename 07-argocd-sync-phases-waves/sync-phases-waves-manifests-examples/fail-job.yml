@@ -14,7 +14,7 @@ spec:
           command: [ "python3", "mattermost_api.py"]
           env:
           - name: message
-            value: "MESSAGE FROM ARGOCD: The last sync is:  *** Sync Failed ***"
+            value: "MESSAGE FROM ARGOCD: The last sync is: ❌ Sync Failed"
           - name: url
             value: "host.docker.internal"
           - name: token
