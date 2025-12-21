@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: app-sync-waves-1           			      # change name
+spec:
+  destination:
+    namespace: app-sync-waves					        # change namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: 07-argocd-sync-phases-waves/sync-phases-waves-manifests-examples
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    syncOptions:							# add sync options section
+    - CreateNamespace=true						# enable CreateNamespace parameter
+    # automated: {}                   # disable automated sync
