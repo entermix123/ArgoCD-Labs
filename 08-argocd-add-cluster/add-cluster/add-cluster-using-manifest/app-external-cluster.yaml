@@ -5,7 +5,7 @@ metadata:
 spec:
   destination:
     namespace: argocd					                # set namespace
-    name: devops-test                         # set the name of the added cluster
+    name: https://172.18.0.7:6443                         # set the name of the added cluster as its IP address 
   project: default
   source:
     path: argocd-application/directoryOfmanifests
