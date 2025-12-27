@@ -5,7 +5,7 @@ metadata:
 spec:
   destination:
     namespace: terraform					                # set namespace
-    name: https://172.18.0.7:6443                         # set the name of the added cluster
+    name: https://cluster2-control-plane:6443                         # set the name of the added cluster
   project: default
   source:
     path: argocd-application/directoryOfmanifests

@@ -41,13 +41,13 @@ data "kubernetes_secret_v1" "argocd_manager_secret" {
 
 resource "argocd_cluster" "new_cluster" {
   provider = argocd.argocd_server
-  server = var.new_cluster_server_addr
+  server   = var.new_cluster_server_addr
 
   config {
-    bearer_token = "${lookup(data.kubernetes_secret_v1.argocd_manager_secret.data, "token")}"
+    bearer_token = lookup(data.kubernetes_secret_v1.argocd_manager_secret.data, "token")
 
     tls_client_config {
-      ca_data  = "${lookup(data.kubernetes_secret_v1.argocd_manager_secret.data, "ca.crt")}"
+      ca_data  = lookup(data.kubernetes_secret_v1.argocd_manager_secret.data, "ca.crt")
       insecure = false
     }
   }
