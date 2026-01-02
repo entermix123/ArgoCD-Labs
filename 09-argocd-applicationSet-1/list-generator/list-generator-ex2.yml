@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet                      # specific manifest type    
+metadata:
+  name: list-generator-ex2                # name of the manifest
+  namespace: argocd                       # namespace of the manifest
+spec:
+  generators:                             # list of generators
+  - list:
+      elements:                           # list of elements (clusters)
+      - environment: pre-staging                  # environment 1 name
+        server: https://kubernetes.default.svc    # environment 1 url
+        path: directoryOfmanifests                # environment 1 path to application manifests
+      - environment: staging                          # environment 2 name
+        server: https://cluster2-control-plane:6443   # environment 2 url
+        path: helm-charts/nginx                       # environment 2 path to application manifests
+  template:                                # application template                     
+    metadata:                       
+      name: '{{environment}}-application'   # name of the application is formed from the environemant's name (cluster name)
+    spec:
+      project: default                      # project name            
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs           # path to the argocd lab repo
+        targetRevision: main                 # use main branch as source version              
+        path: argocd-application/{{path}}     # the path in the repo to the application manifests
+      destination:                            # destination cluster           
+        server: '{{server}}'                  # url of the cluster    
+        namespace: '{{environment}}'          # destination namespace is formed from the environemant's name only (cluster name)
+      syncPolicy:
+        automated: {}                         # automated sync
+        syncOptions:                          # sync options
+          - CreateNamespace=true              # automated namespace creation  

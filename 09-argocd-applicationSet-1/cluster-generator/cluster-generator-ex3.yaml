@@ -1,0 +1,37 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cluster-generator-ex3
+  namespace: argocd
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchLabels:
+          environment: staging                      # select cluster with label - external cluster
+      values:                                       # values section
+        path: helm-charts/nginx                     # path to the app
+        namespace: staging-ns                       # set new namespace for the specific app
+  - clusters:
+      selector:
+        matchLabels:
+          environment: pre-staging                  # select cluster with label - local cluster
+      values:                                       # values section                    
+        path: directoryOfmanifests                  # path to the app
+        namespace: pre-staging-ns                   # set new namespace for the specific app
+  template:
+    metadata:
+      name: '{{name}}-application'
+    spec:
+      project: "default"
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs
+        targetRevision: main
+        path: argocd-application/{{values.path}}
+      destination:
+        server: '{{server}}'
+        namespace: '{{values.namespace}}'           # use different value (namespace name) for each cluster
+      syncPolicy:
+        automated: {}
+        syncOptions:
+          - CreateNamespace=true

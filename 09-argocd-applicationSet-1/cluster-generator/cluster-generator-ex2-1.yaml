@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cluster-generator-ex2-1
+  namespace: argocd
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchLabels:                                    # match cluster labels
+          argocd.argoproj.io/secret-type: cluster       # secret type label, must be cluster and it not common for local cluster
+          environment: staging                          # cluster environment label
+  template:
+    metadata:
+      name: '{{name}}-application'
+    spec:
+      project: "default"
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs
+        targetRevision: main
+        path: argocd-application/helm-charts/nginx
+      destination:
+        server: '{{server}}'
+        namespace: cluster-generator
+      syncPolicy:
+        automated: {}                                   # automated sync
+        syncOptions:
+          - CreateNamespace=true                        # automated namespace creation

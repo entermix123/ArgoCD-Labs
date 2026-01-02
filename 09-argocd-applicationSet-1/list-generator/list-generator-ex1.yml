@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet                      # specific manifest type
+metadata:
+  name: list-generator-ex1                # name of the manifest
+  namespace: argocd                       # namespace
+spec:
+  generators:                             # list of generators
+  - list:                                 # list generator                        
+      elements:                           # list of elements                
+      - cluster: local                          # local cluster name
+        url: https://kubernetes.default.svc             # local cluster url
+        path: directoryOfmanifests                      # local cluster path to application manifests
+      - cluster: external                               # external cluster name
+        url: https://cluster2-control-plane:6443        # external cluster url
+        path: helm-charts/nginx                         # external cluster path to application manifests            
+  template:                                # application template                  
+    metadata:
+      name: '{{cluster}}-application'     # name of the application is formed from the cluster's name (local and external)
+    spec:
+      project: default                    # project name
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs           # path to the argocd lab repo
+        targetRevision: main                 # use main branch as source version
+        path: argocd-application/{{path}}     # the path in the repo to the application manifests
+      destination:
+        server: '{{url}}'                     # url of the cluster
+        namespace: '{{cluster}}'              # destination namespace is formed from the cluster's name only
+      syncPolicy:                             # sync policy               
+        automated: {}                         # automated sync              
+        syncOptions:                          # sync options
+          - CreateNamespace=true              # automated namespace creation

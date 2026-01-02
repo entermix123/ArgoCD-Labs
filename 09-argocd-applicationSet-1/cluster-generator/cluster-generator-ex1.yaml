@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet                      # specific manifest type
+metadata:
+  name: cluster-generator-ex1             # name of the manifest
+  namespace: argocd                       # namespace of the manifest
+spec:
+  generators:
+  - clusters: {}                           # empty cluster generator block
+  template:
+    metadata:
+      name: '{{name}}-application'         # name of the application based on cluster's name
+    spec:
+      project: "default"                   # project name
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs           # path to the argocd lab repo
+        targetRevision: main                                          # use main branch as source version                  
+        path: argocd-application/helm-charts/nginx                    # the path in the repo to the application manifests
+      destination:
+        server: '{{server}}'                                          # url of the cluster
+        namespace: cluster-generator                                  # destination namespace                  
+      syncPolicy:
+        automated: {}                                                 # automated sync
+        syncOptions:
+          - CreateNamespace=true                                      # automated namespace creation
