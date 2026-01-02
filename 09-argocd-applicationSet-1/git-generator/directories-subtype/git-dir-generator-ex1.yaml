@@ -4,25 +4,25 @@ metadata:
   name: git-directories-generator-ex1
   namespace: argocd
 spec:
-  generators:
-  - git:
-      repoURL: https://github.com/devopshobbies/argocd-tutorial.git
-      revision: main
+  generators:                                                         # list of generators
+  - git:                                                              # git generator
+      repoURL: https://github.com/entermix123/ArgoCD-Labs             # used repo
+      revision: main                                                  # used branch as revision
       directories:
-      - path: v09-argocd-applicationSet-1/git-generator/resources/*
-  template:
+      - path: 09-argocd-applicationSet-1/git-generator/resources/*    # path to resources of the application
+  template:                                                           # application template
     metadata:
-      name: '{{path.basename}}-application'
+      name: '{{path.basename}}-application'                           # name of the application - app's dirs
     spec:
       project: default
       source:
-        repoURL: https://github.com/devopshobbies/argocd-tutorial.git
-        targetRevision: main
-        path: '{{path}}'
+        repoURL: https://github.com/entermix123/ArgoCD-Labs           # used repo for app template
+        targetRevision: main                                          # used branch as revision
+        path: '{{path}}'                                              # used path from the generator
       destination:
-        server: https://kubernetes.default.svc
-        namespace: '{{path.basename}}-ns'
+        server: https://kubernetes.default.svc                        # url of the cluster - local cluster in this example
+        namespace: '{{path.basename}}-ns'                             # destination namespace created path.basename - app's dirs
       syncPolicy:
-        automated: {}
+        automated: {}                                                 # automated sync
         syncOptions:
-          - CreateNamespace=true
+          - CreateNamespace=true                                      # automated namespace creation
