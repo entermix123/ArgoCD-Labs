@@ -2,10 +2,9 @@
     "cluster": {
       "owner": "jordan",
       "name": "pre-staging",
-      "path": "argocd-applications/directoryOfmanifests",
+      "path": "argocd-application/directoryOfmanifests",
       "source_type": "directoryOfManifests",
       "address": "https://kubernetes.default.svc",
       "namespace": "pre-staging-ns"
     }
   }
-  
