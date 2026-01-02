@@ -5,26 +5,26 @@ metadata:
   namespace: argocd
 spec:
   generators:
-  - git:
-      repoURL: https://github.com/devopshobbies/argocd-tutorial.git
-      revision: main
+  - git:                                                                                # git generator              
+      repoURL: https://github.com/entermix123/ArgoCD-Labs                               # used repo
+      revision: main                                                                    # used branch as revision
       directories:
-      - path: v09-argocd-applicationSet-1/git-generator/resources/*
-      - path: v09-argocd-applicationSet-1/git-generator/resources/nginx-manifests
-        exclude: true
+      - path: 09-argocd-applicationSet-1/git-generator/resources/*                      # path to resource folder - all applications
+      - path: 09-argocd-applicationSet-1/git-generator/resources/nginx-manifests        # path to manifest folder - excluded nginx manifest
+        exclude: true                                                                   # exclude this path from the generator
   template:
     metadata:
-      name: '{{path.basename}}-application'
+      name: '{{path.basename}}-application'                                             # name of the application - app's dirs
     spec:
       project: default
       source:
-        repoURL: https://github.com/devopshobbies/argocd-tutorial.git
-        targetRevision: main
-        path: '{{path}}'
+        repoURL: https://github.com/entermix123/ArgoCD-Labs                             # used repo for app template
+        targetRevision: main                                                            # used branch as revision
+        path: '{{path}}'                                                                # used path from the generator
       destination:
-        server: https://kubernetes.default.svc
-        namespace: '{{path.basename}}-ns'
+        server: https://kubernetes.default.svc                                          # cluster url - local cluster
+        namespace: '{{path.basename}}-ns'                                               # destination namespace based on the applications dirs
       syncPolicy:
-        automated: {}
+        automated: {}                                                                   # automated sync
         syncOptions:
-          - CreateNamespace=true
+          - CreateNamespace=true                                                        # automated namespace creation
