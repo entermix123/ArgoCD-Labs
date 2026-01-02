@@ -6,23 +6,23 @@ metadata:
 spec:
   generators:
   - git:
-      repoURL: https://github.com/devopshobbies/argocd-tutorial.git
-      revision: main
+      repoURL: https://github.com/entermix123/ArgoCD-Labs                                     # used repo
+      revision: main                                                                          # use main branch
       files:
-      - path: v09-argocd-applicationSet-1/git-generator/cluster-config/**/config.json
+      - path: 09-argocd-applicationSet-1/git-generator/cluster-config/**/config.json          # path to cluster config files
   template:
     metadata:
-      name: '{{cluster.name}}-application'
+      name: '{{cluster.name}}-application'                      # application name based on cluster name
     spec:
       project: default
       source:
-        repoURL: https://github.com/devopshobbies/argocd-tutorial.git
-        targetRevision: main
-        path: '{{cluster.path}}'
+        repoURL: https://github.com/entermix123/ArgoCD-Labs     # used repo for app template
+        targetRevision: main                                    # used branch as revision
+        path: '{{cluster.path}}'                                # path to application in the cluster configss 
       destination:
-        server: '{{cluster.address}}'
-        namespace: '{{cluster.namespace}}'
+        server: '{{cluster.address}}'                           # url of the cluster from cluster config
+        namespace: '{{cluster.namespace}}'                      # destination namespace from cluster config
       syncPolicy:
-        automated: {}
+        automated: {}                                           # automated sync
         syncOptions:
-          - CreateNamespace=true
+          - CreateNamespace=true                                # automated namespace creation
