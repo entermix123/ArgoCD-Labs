@@ -2,7 +2,7 @@
     "cluster": {
       "owner": "jordan",
       "name": "staging",
-      "path": "v03-argocd-applications/helm/nginx",
+      "path": "argocd-application/helm-charts/nginx",
       "source_type": "helm", 
       "address": "https://cluster2-control-plane:6443",
       "namespace": "staging-ns"
