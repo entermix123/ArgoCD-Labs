@@ -1,0 +1,30 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: matrix-generator-ex1
+spec:
+  generators:
+    - matrix:                                                                         # matrix generator
+        generators:                                                                   # list of generators
+          - git:                                                                      # git generator
+              repoURL: https://github.com/entermix123/ArgoCD-Labs                     # used repository
+              revision: main                                                          # used branch as versioning
+              directories:
+                - path: 09-argocd-applicationSet-1/git-generator/resources/*          # applications source folder path 
+          - clusters: {}                                                              # cluster child generator
+  template:
+    metadata:
+      name: '{{path.basename}}-{{name}}'                                              # application name based on source fodler name and cluster name
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs                           # used repository for application template
+        targetRevision: main                                                          # used branch as versioning
+        path: '{{path}}'                                                              # application source folder path
+      destination:
+        server: '{{server}}'                                                          # cluster url
+        namespace: '{{metadata.labels.environment}}'                                  # destination namespace based on cluster labels
+      syncPolicy:
+        automated: {}                                                                 # automated sync
+        syncOptions:
+          - CreateNamespace=true                                                      # automated namespace creation

@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: matrix-generator-ex2
+spec:
+  generators:
+    - matrix:                                                                             # matrix generator
+        generators:                                                                       # list of generators
+          - git:                                                                          # git generator
+              repoURL: https://github.com/entermix123/ArgoCD-Labs                         # used repository by the generator
+              revision: main                                                              # used branch as versioning
+              directories:
+                - path: 09-argocd-applicationSet-1/git-generator/resources/*              # applications source folder path
+          - list:                                                                         # list generator
+              elements:                                                                   # list of elements
+              - environment: pre-staging                                                  # environment 1 name
+                server: https://kubernetes.default.svc                                    # local cluster url
+              - environment: staging                                                      # environment 2 name
+                server: https://cluster2-control-plane:6443                               # external cluster url
+  template:
+    metadata:
+      name: '{{path.basename}}-{{environment}}'                   # application name based on source fodler name and environment name 
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs       # used repository for application template
+        targetRevision: main                                      # used branch as versioning
+        path: '{{path}}'                                          # application source folder path
+      destination:
+        server: '{{server}}'                                      # clusters urls
+        namespace: '{{environment}}'                              # destination namespace based on environments names
+      syncPolicy:
+        automated: {}                                             # automated sync
+        syncOptions:
+          - CreateNamespace=true                                  # automated namespace creation

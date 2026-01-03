@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: matrix-generator-ex3
+spec:
+  generators:
+    - matrix:                                                                                       # matrix generator
+        generators:                                                                                 # list of generators
+          - git:                                                                                    # git generator
+              repoURL: https://github.com/entermix123/ArgoCD-Labs                                   # used repository
+              revision: main                                                                        # used branch as versioning
+              files:
+                - path: 09-argocd-applicationSet-1/git-generator/cluster-config/**/config.json      # cluster configurations files path
+          - clusters:                                                                               # cluster generator
+              selector:                                                                             # cluster selector
+                matchLabels:
+                  argocd.argoproj.io/secret-type: cluster                                           # cluster match label filter 1
+                  environment: '{{cluster.name}}'                                                   # cluster match label filter 2 - envronment label
+  template:
+    metadata:
+      name: '{{name}}-application'                                      # application name
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs             # used repository
+        targetRevision: main                                            # used branch as versioning
+        path: '{{cluster.path}}'                                        # application source folder path
+      destination:
+        server: '{{server}}'                                            # clusters urls from the cluster configs
+        namespace: '{{metadata.labels.environment}}'                    # destination namespace name based on cluster labels
+      syncPolicy:
+        automated: {}                                                   # automated sync
+        syncOptions:
+          - CreateNamespace=true                                        # automated namespace creation
