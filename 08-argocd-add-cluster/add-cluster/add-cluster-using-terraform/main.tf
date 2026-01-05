@@ -42,6 +42,7 @@ data "kubernetes_secret_v1" "argocd_manager_secret" {
 resource "argocd_cluster" "new_cluster" {
   provider = argocd.argocd_server
   server   = var.new_cluster_server_addr
+  name     = "external"
 
   config {
     bearer_token = lookup(data.kubernetes_secret_v1.argocd_manager_secret.data, "token")
