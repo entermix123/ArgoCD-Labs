@@ -1,0 +1,1380 @@
+
+INSTALL ARGOCD USING HELM CHARTS
+================================
+
+We need to install evironment tools depending on what kind of setup we will use for managing Kubernetes clusters.
+
+We will go true installing lightweight setup on windows 11 with:
+	1. Docker - container management application
+	2. Kind - application that uses Docker to manage Kubernetes clusters with containers
+	3. Kubectl - Kubernetes CLI 
+	4. Install Terraform
+	5. Helm - Kubernetes extension that help managing manifest files in Kuberentes clusters
+	6. Create Kuberentes Cluster with Kind
+	7. install ArgoCD
+	8. Install kubectl argo rollouts (kargo)
+	9. Create second Kubernetes Kind cluster
+	10. Adding the second clusters to ArgoCD
+	11. Install argo rollouts on main (ArgoCD host) cluster
+
+
+
+
+1. Istall Docker on Windows
+===========================
+Register, download and install Docker - https://www.docker.com/products/docker-desktop/
+
+
+2. Install Kind on Windows
+==========================
+
+Kind install documentation - https://kind.sigs.k8s.io/docs/user/quick-start/#installing-from-release-binaries
+
+Install Kind with Shell
+	terminal --> curl.exe -Lo kind-windows-amd64.exe https://kind.sigs.k8s.io/dl/v0.30.0/kind-windows-amd64
+Move-Item .\kind-windows-amd64.exe c:\Users\your_user\kind.exe
+
+Verify Kind installation
+	terminal --> kind version
+
+
+3. Install kubectl on Windows
+=============================
+Kubernetes documentation for installing kubectl
+	- https://kubernetes.io/docs/tasks/tools/
+
+Install kubectl on Windows
+	- https://kubernetes.io/docs/tasks/tools/install-kubectl-windows/
+
+Install kubectl using curl
+	terminal --> curl.exe -LO "https://dl.k8s.io/release/v1.34.0/bin/windows/amd64/kubectl.exe"
+
+Verify installation using power shell
+	power shell --> $(Get-FileHash -Algorithm SHA256 .\kubectl.exe).Hash -eq $(Get-Content .\kubectl.exe.sha256)
+	# result: true
+
+Find the location of the kubectl.exe file - usually in C:/Users/your_user and copy the path from the windows explorer navigation bar.
+
+Append or prepend the kubectl binary folder to your PATH environment variable.
+	- WinKey, type 'environment' and click on 'Edit the system variables', click 'Environment Variables' button at the bottom
+	- In the System variables list, find 'Path', mark it and click 'Edit...' button. Click 'New' and paste the path to the kubectl.exe file in the field. Click 'Ok' button. 
+	# If we have more than one kubectl installed we need to 'move up' the path of the specific installation so Windows will use the first found installation as default.
+	- Restart the PC
+
+Open CMD and check if the kubectl location and installation are successful
+	terminal --> where kubectl		# this should list all kubectl installations and their locations
+	terminal --> kubectl version --client	# this should list all client and their versions (kubectl, kustomize etc.)
+
+	# example result:
+	Client Version: v1.34.0
+	Kustomize Version: v5.7.1
+
+
+4. Install Helm on Windows
+==========================
+
+Helm install documentation - https://helm.sh/docs/intro/install
+
+Download Helm - https://get.helm.sh/helm-v4.0.1-windows-amd64.zip
+
+Extract helm.exe in c:\Users\your_user\		# same as Kind
+
+Verify Helm installation
+	terminal --> helm version
+
+
+5. Install Terraform
+====================
+
+Terraform download page - https://developer.hashicorp.com/terraform/install
+
+Choose version AMD64 and download it. Unzip it in C:/Users/your-user/ or C:/Program Files/terraform.
+	- copy the file path
+
+Add the path to the binary in the PATH environment variable
+	- open 'View advanced system settings/Control Panel/System Properties/' and click on [Environment Variables]
+	- click on the "Path" variable and on the [Edit] button
+	- press the [New] button and add the path to where the terraform.exe file is
+	- click consecutively on [OK] buttons to exit all settings.
+	- confirm installation with terminal --> terraform -v
+
+
+
+6. Create Kuberentes Cluster with Kind
+======================================
+
+In case we want cluster with more than one node:
+
+1. Create kind-config.yaml file on you system. Example - C:\Users\your_user\Kubernetes_Kind_Projects\kind-config.yaml
+
+
+Option 1 - using helm official chart for ArgoCD
+
+kind-config.yaml
+-------------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  extraPortMappings:
+  - containerPort: 32073
+    hostPort: 32073
+    protocol: TCP
+  - containerPort: 32074
+    hostPort: 32074
+    protocol: TCP
+- role: worker
+- role: worker
+-------------------------------------------------
+
+
+
+Option 2 - Use Nginx ingress controller
+
+kind-config-nginx.yaml
+-------------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 32073
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 32074
+    protocol: TCP
+- role: worker
+- role: worker
+-------------------------------------------------
+
+We will use nginx ingresscontroller - option 2
+
+2. Create cluster 
+	terminal --> kind create cluster --config kind-config-nginx.yaml --image kindest/node:v1.34.0
+
+In case we want simple one node cluster we start it with:
+	terminal --> kind create cluster --name my-argocd-cluster --image kindest/node:v1.34.0
+
+3. Confirm cluster creation
+	terminal --> kubectl cluster-info 
+	terminal --> kubectl get nodes
+
+4. Set roles for worker nodes
+	terminal --> kubectl label nodes kind-worker kind-worker2 node-role.kubernetes.io/worker= --overwrite
+
+	# result:
+	node/kind-worker labeled
+	node/kind-worker2 labeled
+
+
+
+
+SET ALIAS FOR KUBECTL (Shell and CMD)
+-------------------------------------
+
+
+for SHELL:
+
+We use command 'k' instead of 'kubectl' to save time and prevent mistyping.
+
+Edit Shell Profile configs
+	terminal --> if (!(Test-Path -Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force }
+notepad $PROFILE
+	or
+	terminal --> notepad $PROFILE
+	or
+	code $PROFILE
+
+
+---------------------------------
+# Alias for kubectl
+Set-Alias -Name k -Value kubectl
+---------------------------------
+Save changes and restart PowerShell
+
+
+For CMD:
+Set alias for kubectl
+	etrminal --> doskey k=kubectl $*
+
+
+PREVENT SCHEDULING PODS ON CONTROLPLANE
+---------------------------------------
+We need to set taints on the controlplain to prevent application pod deployment on it. By default is set be we need to be sure.
+
+Check existing taints
+	shell terminal --> kubectl describe node kind-control-plane | Select-String -Pattern "Taint"
+
+	# result: Taints:             node-role.kubernetes.io/control-plane:NoSchedule
+
+
+If the result is different set the taints:
+
+Prevent scheduling deployments on the controlplane
+	terminal --> kubectl taint nodes kind-control-plane node-role.kubernetes.io/control-plane:NoSchedule --overwrite
+
+
+RENAME LOCAL CLUSTER
+--------------------
+
+To deploy application on the local cluster using labels we need to create secret matching the matching label filter using ArgoCD UI or CLI. This way we can set labels to the local cluster.
+
+Create local cluster secret:
+
+local-secret.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: local
+  labels:
+    argocd.argoproj.io/auto-label-cluster-info: "true"  # auto label the local cluster with kubernetes cluster version
+    argocd.argoproj.io/secret-type: cluster		# set secret label type cluster
+    environment: pre-staging				# set environment label
+type: Opaque
+stringData:
+  name: local                                # name of the local cluster - will be renamed automatically to this one if different
+  server: https://kubernetes.default.svc		# set local cluster address
+  config: |
+    {
+      "tlsClientConfig": {
+        "insecure": false
+      }
+    }
+-----------------------------------------------
+
+!!! The local cluster will be autolabeled with the kuberletes cluster version. !!!
+
+Create the secret in the cluster
+	terminal --> k apply -f local-secret.yaml
+
+	# result: secret/local created
+
+
+
+
+
+
+7. INSTALL ARGOCD WITH HELM
+===========================
+
+We will go over 2 types of Helm ArgoCD installations
+	I. 	Modifying Helm Chart and overwriting argocd server-service to NodePort - values.yaml
+	II. 	Modifying Helm Chart and Nginx ingress-controller and overwriting ingress controller - values-nginx.yaml
+
+
+I. Modifying Helm Chart and overwriting argocd server-service to NodePort - values.yaml:
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+1. Add ArgoCD repository in Helm registry
+	terminal --> helm repo add argo https://argoproj.github.io/argo-helm 
+
+	# result: "argo" has been added to your repositories
+
+	1.1. Confirm repo is added
+		terminal --> helm repo list
+
+		# result:
+		NAME    URL
+		argo    https://argoproj.github.io/argo-helm
+
+2. Update Helm repositories
+	terminal --> helm repo update
+	
+	# result: 
+	Hang tight while we grab the latest from your chart repositories...
+	...Successfully got an update from the "argo" chart repository
+	Update Complete. ⎈Happy Helming!⎈
+
+
+3. Create argocd namespace
+	terminal --> kubectl create ns argocd
+
+	# result: namespace/argocd created
+
+We need to configure NodePort service for ArgoCD UI to be accessable:
+4. Create values.yaml for ArgoCD installation
+	terminal --> notepad values.yaml
+
+values.yaml
+---------------------------------
+server:
+  service:
+    type: NodePort
+    nodePortHttp: 32073
+    nodePortHttps: 32074
+---------------------------------
+
+
+4. Install ArgoCD on the cluster
+	terminal --> helm install argocd argo/argo-cd -f .\values.yaml -n argocd --create-namespace
+
+	# helm install					- use helm application to install
+	# argocd 	 				- name of the helm deployment
+	# argo/argo-cd					- helm chart
+	# -f .\values.yaml				- use file values.yaml in the current dir
+	# -n argocd --create-namespace			- selected namespace or create it
+
+
+5. List service in argocd namespace and check the type of the server service
+	terminal --> k get svc -n argocd
+
+	# result:
+NAME                               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                      AGE
+argocd-applicationset-controller   ClusterIP   10.96.186.86    <none>        7000/TCP                     93s
+argocd-dex-server                  ClusterIP   10.96.69.196    <none>        5556/TCP,5557/TCP            93s
+argocd-redis                       ClusterIP   10.96.155.85    <none>        6379/TCP                     93s
+argocd-repo-server                 ClusterIP   10.96.236.248   <none>        8081/TCP                     93s
+argocd-server                      NodePort    10.96.187.167   <none>        80:32073/TCP,443:32074/TCP   93s	# NodePort
+
+
+
+
+
+II. Modifying Helm Chart and Nginx ingress-controller and overwriting ingress controller - values-nginx.yaml
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+
+Create configuration file from the original Helm Argocd chart
+	terminal --> helm show values argo/argo-cd > values-nginx.yaml
+
+Open the file and search for 'ingress'. On line 2390 we can find the ingress fields. 
+
+Modify ingress configurations as official documentation - https://argo-cd.readthedocs.io/en/latest/operator-manual/ingress/#kubernetesingress-nginx
+
+Option 1 - https://argo-cd.readthedocs.io/en/latest/operator-manual/ingress/#option-1-ssl-passthrough
+
+We clear the file and set final configuration as follow:
+
+values-nginx-simplified.yaml
+--------------------------------------------------------------------
+server:
+    # Argo CD server ingress configuration
+    ingress:
+        # -- Enable an ingress resource for the Argo CD server
+        enabled: true
+        annotations:
+            nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+
+        # -- Defines which ingress controller will implement the resource
+        ingressClassName: nginx
+
+        # -- Argo CD server hostname
+        # @default -- `""` (defaults to global.domain)
+        hostname: "argocd.localhost"
+
+        # -- The path to Argo CD server
+        path: /
+
+        # -- Ingress path type. One of `Exact`, `Prefix` or `ImplementationSpecific`
+        pathType: Prefix
+
+        # -- Enable TLS configuration for the hostname defined at `server.ingress.hostname`
+        ## TLS certificate will be retrieved from a TLS secret `argocd-server-tls`
+        ## You can create this secret via `certificate` or `certificateSecret` option
+        tls: true
+--------------------------------------------------------------------
+# save as UTF-8 format
+
+
+If we install with this method we need to uninstall the installed version first
+
+Uninstall existing ArgoCD 
+	terminal --> helm uninstall argocd -n argocd
+	
+	# result:
+	These resources were kept due to the resource policy:
+	[CustomResourceDefinition] applications.argoproj.io
+	[CustomResourceDefinition] applicationsets.argoproj.io
+	[CustomResourceDefinition] appprojects.argoproj.io
+	release "argocd" uninstalled
+
+
+Before installing ArgoCD with nginx ingress controller we need to install nginx deployment
+	terminal --> kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.0/deploy/static/provider/kind/deploy.yaml
+
+	Wait 2-3 minutes and confirm that Nginx deployment is running
+		terminal --> k get pods -n ingress-nginx
+
+		# result:
+		NAME                                        READY   STATUS      RESTARTS   AGE
+		ingress-nginx-admission-create-2clvc        0/1     Completed   0          49s
+		ingress-nginx-admission-patch-xwb6r         0/1     Completed   0          49s
+		ingress-nginx-controller-569c5c4774-ftqzm   1/1     Running     0          49s		# running
+
+		terminal --> k get deployment -n ingress-nginx
+
+		# result:
+		NAME                       READY   UP-TO-DATE   AVAILABLE   AGE
+		ingress-nginx-controller   1/1     1            1           55s
+		
+
+	Edit the deployment and add '--enable-ssl-passthrough' flag in specs
+		terminal --> k edit deployment ingress-nginx-controller -n ingress-nginx
+
+------------------------------------------------------------
+...
+    spec:
+      containers:
+      - args:
+        - /nginx-ingress-controller
+        - --election-id=ingress-nginx-leader
+        - --controller-class=k8s.io/ingress-nginx
+        - --ingress-class=nginx
+        - --configmap=$(POD_NAMESPACE)/ingress-nginx-controller
+        - --validating-webhook=:8443
+        - --validating-webhook-certificate=/usr/local/certificates/cert
+        - --validating-webhook-key=/usr/local/certificates/key
+        - --watch-ingress-without-class=true
+        - --enable-metrics=false
+        - --publish-status-address=localhost
+        - --enable-ssl-passthrough						# added
+...
+------------------------------------------------------------
+save changes
+
+Install ArgoCD with nginx ingress controller
+	terminal --> helm install argocd argo/argo-cd -f values-nginx-simplified.yaml -n argocd --create-namespace
+
+
+Confirm ArgoCD deployment
+	terminal --> k get ingress -n argocd
+
+	# result:
+	NAME            CLASS   HOSTS       ADDRESS     PORTS     AGE
+	argocd-server   nginx   localhost   localhost   80, 443   2m8s		# Wait ADDRESS to appear
+
+Set default  namespace in the main cluster
+	terminal --> kubectl config set-context kind-kind --namespace=argocd
+
+	# result: Context "kind-kind" modified.
+
+Find the password of admin user of ArgoCD
+	powershell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+	# result: password
+
+Connect to the Node with ArgoCD CLI
+	terminal --> argocd login argocd.localhost:32074 --insecure --grpc-web --username admin --password <password>
+	or
+	terminal --> argocd login argocd.localhost:32074 --insecure --grpc-web --username admin
+	terminal --> password
+
+Confirm default namespace config
+	terminal --> argocd cluster list
+
+
+ACCESS ARGOCD UI
+----------------
+
+Add host address to Windows host list
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 argocd.localhost'
+		- save the file and exit
+
+Find initial password for ArgoCD:
+	shell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+	# result: password we will use to access the ArgoCD UI
+
+Open ArgoCD UI:
+
+In case we are using official Helm chart:
+- Open braowser and go to https://argocd.localhost:32074
+- Press Advanced and accept the risk and continue
+
+In case we are using nginx ingress controller
+- Open braowser and go to localhost			# the hostname we set up in the values-nginx.yaml file
+- Press Advanced and accept the risk and continue
+
+Login to ArgoCD
+	Username: admin
+	Password: use the password
+
+
+List clusters
+	terminal --> argocd cluster list
+
+	# result:
+	SERVER                               NAME      VERSION  STATUS      MESSAGE  PROJECT
+	https://cluster2-control-plane:6443  external  1.34     Successful
+	https://kubernetes.default.svc       local     1.34     Successful 			# renamed
+	
+	# the local sluter is renamed from 'in-cluster' to 'local'
+
+
+
+
+8. Argo-rollouts Installation
+=============================
+
+Installation documentation - https://argo-rollouts.readthedocs.io/en/stable/installation/
+
+
+Step 1:
+-------
+install.yaml - Standard installation method.
+	Create argo-rollouts namespace
+		terminal --> kubectl create namespace argo-rollouts
+
+		# result: namespace/argo-rollouts created
+
+	Apply argo-rollouts manifest into argo-rollouts namepsace
+		terminal --> kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+		# result:
+		customresourcedefinition.apiextensions.k8s.io/analysisruns.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/analysistemplates.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/clusteranalysistemplates.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/experiments.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/rollouts.argoproj.io created
+		serviceaccount/argo-rollouts created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-admin created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-edit created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-view created
+		clusterrolebinding.rbac.authorization.k8s.io/argo-rollouts created
+		configmap/argo-rollouts-config created
+		secret/argo-rollouts-notification-secret created
+		service/argo-rollouts-metrics created
+		deployment.apps/argo-rollouts created
+
+
+	Confirm components installtion
+		terminal --> kubectl get all -n argo-rollouts
+
+
+		# result:
+		NAME                                 READY   STATUS    RESTARTS   AGE
+		pod/argo-rollouts-65c8945cc7-zchlm   1/1     Running   0          4m40s
+
+		NAME                            TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+		service/argo-rollouts-metrics   ClusterIP   10.96.238.38   <none>        8090/TCP   4m40s
+
+		NAME                            READY   UP-TO-DATE   AVAILABLE   AGE
+		deployment.apps/argo-rollouts   1/1     1            1           4m40s
+
+		NAME                                       DESIRED   CURRENT   READY   AGE
+		replicaset.apps/argo-rollouts-65c8945cc7   1         1         1       4m40s
+
+
+Step 2:
+-------
+
+Install kargo dashboard
+	terminal --> kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/dashboard-install.yaml
+
+	# result:
+	serviceaccount/argo-rollouts-dashboard created
+	clusterrole.rbac.authorization.k8s.io/argo-rollouts-dashboard created
+	clusterrolebinding.rbac.authorization.k8s.io/argo-rollouts-dashboard created
+	service/argo-rollouts-dashboard created
+	deployment.apps/argo-rollouts-dashboard created
+
+	(Optional - just for test)
+	Foreward port for kargo dashboard
+		terminal --> kubectl port-forward -n argo-rollouts svc/argo-rollouts-dashboard 3100:3100
+		terminal --> Ctrl+C
+
+
+Set additional service dashboard-ingress.yaml for dashboard to access it.
+
+dashboard-ingress.yaml
+-----------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-rollouts-dashboard
+  namespace: argo-rollouts
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: rollouts.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-rollouts-dashboard
+            port:
+              number: 3100
+-----------------------------------------------------
+
+Create the service
+	terminal --> kubectl apply -f dashboard-ingress.yaml
+
+	# result: ingress.networking.k8s.io/argo-rollouts-dashboard created
+
+
+
+Confirm components installtion
+	terminal --> kubectl get all -n argo-rollouts
+
+
+	# result:
+	NAME                                           READY   STATUS    RESTARTS   AGE
+	pod/argo-rollouts-65c8945cc7-6f4c5             1/1     Running   0          3m12s
+	pod/argo-rollouts-dashboard-5659ccf55b-vdrwg   1/1     Running   0          2m5s
+	
+	NAME                              TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+	service/argo-rollouts-dashboard   ClusterIP   10.96.71.204   <none>        3100/TCP   2m5s
+	service/argo-rollouts-metrics     ClusterIP   10.96.70.150   <none>        8090/TCP   3m12s
+
+	NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+	deployment.apps/argo-rollouts             1/1     1            1           3m13s
+	deployment.apps/argo-rollouts-dashboard   1/1     1            1           2m6s
+
+	NAME                                                 DESIRED   CURRENT   READY   AGE
+	replicaset.apps/argo-rollouts-65c8945cc7             1         1         1       3m13s
+	replicaset.apps/argo-rollouts-dashboard-5659ccf55b   1         1         1       2m6s
+
+
+Add host address to Windows host list
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 rollouts.localhost'
+		- save the file and exit
+
+
+STEP 3 
+------
+
+Download kargo-dashboards binary for Windows
+	terminal --> iwr https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-windows-amd64 -OutFile kubectl-argo-rollouts.exe
+
+Create folder
+terminal --> mkdir ~/bin -Force
+Move-Item ./kubectl-argo-rollouts.exe ~/bin/kubectl-argo-rollouts.exe
+
+Add the binary to PATH
+	terminal --> [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\bin", "User")
+
+
+Set Alias for kubectl-argo-rollouts:
+------------------------------------
+Open Power Shell profile AS ADMIN and set alias below. 
+	terminal --> code $PROFILE
+
+-----------------------------------------------------
+# Alias for kubectl
+Set-Alias -Name k -Value kubectl
+
+# Alias for kubectl-argo-rollouts
+Set-Alias -Name kargo -Value kubectl-argo-rollouts	# added
+-----------------------------------------------------
+
+Restart power shell 
+Load Power Shell profile
+	terminal --> . $PROFILE
+
+Verify binary installation
+	termimnal --> kubectl-argo-rollouts version
+	or
+	terminal --> kargo version
+
+
+
+9. Create second Kubernetes Kind cluster
+========================================
+
+Set cluster configuration kind-config-nginx-2.yaml
+
+kind-config-nginx-2.yaml
+-----------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  apiServerAddress: "127.0.0.1"
+  apiServerPort: 6444  # Different port from first cluster (default is 6443)
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 32075  # Different from first cluster (32073)
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 32076  # Different from first cluster (32074)
+    protocol: TCP
+- role: worker
+- role: worker
+-----------------------------------------------
+
+
+Create the cluster
+	terminal --> kind create cluster --name cluster2 --config kind-config-nginx-2.yaml --image kindest/node:v1.34.0
+
+Find the context of the new cluster
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2			# target context
+        *  	  kind-kind       kind-kind       kind-kind       argocd
+
+Use 'kind-cluster2' context to add the new cluster to ArgoCD Server
+
+Set the context of the cluster2 to kubectl
+	terminal --> kubectl config use-context kind-cluster2
+
+Find the names of the containers of the cluster 2
+	terminal --> docker ps | findstr cluster2
+
+# result:
+3258b4633e7e   kindest/node:v1.34.0   "/usr/local/bin/entr???"   34 minutes ago   Up 34 minutes                                                                              cluster2-worker
+862e5199ab8a   kindest/node:v1.34.0   "/usr/local/bin/entr???"   34 minutes ago   Up 34 minutes                                                                              cluster2-worker2
+b6fd04b32bce   kindest/node:v1.34.0   "/usr/local/bin/entr???"   34 minutes ago   Up 34 minutes   0.0.0.0:32075->80/tcp, 0.0.0.0:32076->443/tcp, 127.0.0.1:6444->6443/tcp    cluster2-control-plane
+
+Find the port of the controlplane of the cluster2 - cluster2-control-plane
+	terminal --> docker inspect cluster2-control-plane --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+
+	# result: 172.18.0.6
+
+We will use this name "https://cluster2-control-plane:6443" or IP address ("https://172.18.0.6:6443") to configure the second cluster into ArgoCD Server. The name is recommended because the IP address can be changed.
+
+
+Login to ArgoCD CLI to cluster 1:
+---------------------------------
+
+We have installed ArgoCD on the first cluster so we need to login to it to configure the connection to the second cluster.
+
+Set the context to kubectl with the cluster with installed ArgoCD server on it
+	terminal --> kubectl config use-context kind-kind
+
+Find the password of admin user of ArgoCD
+	powershell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+	# result: password
+
+Connect to the Node with ArgoCD CLI
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin --password Tip-kdHFNljqdnq3
+	or
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin
+	terminal --> password
+
+
+
+
+10. Adding the second clusters to ArgoCD
+========================================
+
+
+Adding Cluster Manually
+-----------------------
+
+List clusters
+	terminal --> argocd cluster list
+
+	# result
+	SERVER                          NAME        VERSION  STATUS      MESSAGE  PROJECT
+	https://kubernetes.default.svc  in-cluster  1.34     Successful
+
+We can also check in ArgoCD UI/Settings/Clusters
+
+We have only the local Kind cluster we created from the start of the course.
+
+Adding another cluster:
+-----------------------
+First we need to create a service account that will be responsible for the applications to the newly added cluster. It must have the necessary access to this cluster - admin.
+
+Create cluster service account
+	terminal --> k create sa new-cluster-sa
+
+	# result: serviceaccount/new-cluster-sa created
+
+Print cluster role admin
+	terminal --> k get clusterrole cluster-admin
+
+	# result:
+	NAME            CREATED AT
+	cluster-admin   2025-12-10T11:36:54Z
+
+
+Show clusterrolebinding help commands
+	terminal --> k create clusterrolebinding --help
+
+Examples:
+  # Create a cluster role binding for user1, user2, and group1 using the cluster-admin cluster role
+  kubectl create clusterrolebinding cluster-admin --clusterrole=cluster-admin --user=user1 --user=user2 --group=group1
+
+
+Bind cluster-admin role to this new-cluster-sa by creating clusterrolebinding
+	terminal --> k create clusterrolebinding argocd-clusterbinding --clusterrole=cluster-admin --serviceaccount=default:new-cluster-sa 
+
+		# k						- kubectl common command
+		# create					- action	
+		# clusterrolebinding				- target object
+		# argocd-clusterbinding				- name of the target object
+		# --clusterrole=cluster-admin			- type of the target object
+		# --serviceaccount=default:new-cluster-sa	- used existing role as default
+
+
+	# result: clusterrolebinding.rbac.authorization.k8s.io/argocd-clusterbinding created
+
+This new serviceaccount now has admin permissions on the cluster.
+
+Test the permissions of the serviceaccount
+	terminal --> k auth can-i create pods --as system:serviceaccount:default:new-cluster-sa 
+	terminal --> k auth can-i delete pods --as system:serviceaccount:default:new-cluster-sa 
+	terminal --> k auth can-i create deploy --as system:serviceaccount:default:new-cluster-sa 
+	terminal --> k auth can-i delete deploy --as system:serviceaccount:default:new-cluster-sa 
+
+	# result: yes
+
+Manually geberate token for our new service account
+	terminal --> k create token new-cluster-sa 
+
+	# result: token
+
+
+Show details for the new cluster
+	terminal --> cat ~/.kube/config
+
+	# we have line "server: https://127.0.0.1:58857"		# this is the new cluster IP address
+
+Show certidicate of our new cluster
+# Linux/Mac
+	- Get the certificate directly from kubeconfig 
+		terminal --> kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}'
+
+	- Decode it to see the actual cert
+		terminal --> kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d
+
+# Kind cluster
+	- Get the CA cert from Kind
+		terminal --> docker cp kind-control-plane:/etc/kubernetes/pki/ca.crt ./ca.crt
+
+	- Then base64 encode it 
+		# Linux/Mac
+		terminal --> base64 -w 0 ca.crt
+		# Windows PowerShell:
+		terminal --> [Convert]::ToBase64String([IO.File]::ReadAllBytes("ca.crt"))
+
+
+Set cluster secret manifest file called cluster-secret.yaml
+
+cluster-secret.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: external-cluster
+  labels:
+    argocd.argoproj.io/secret-type: cluster			# important - seceret with type 'cluster'
+type: Opaque
+stringData:
+  name: https://cluster2-control-plane:6443			# name of the new clustr when is added to ArgoCD API Server
+  server: API_SERVER_ADDRESS		# set the new cluster IP address
+  config: |
+    {
+      "bearerToken": "SERVICE_ACCOUNT_TOKEN",		# set the token we generated
+      "tlsClientConfig": {
+        "insecure": false,
+        "caData": "BASE64 ENCODED CERTIFICATE"		# set the encoded cluster cetificate
+      }
+    }
+-----------------------------------------------
+
+
+Apply the secret
+	terminal --> k apply -f cluster-secret.yaml
+
+	# secret/external-cluster created
+
+
+List clusters
+	terminal --> argocd cluster list
+
+	# result
+	SERVER                          		NAME        V		     ERSION  STATUS      MESSAGE  PROJECT
+	https://cluster2-control-plane:6443		https://cluster2-control-plane:6443	     Unknown	 Cluster...
+	https://kubernetes.default.svc  		in-cluster  		     1.34     Successful
+
+
+
+
+Adding cluster using terraform
+------------------------------
+
+We will connect new cluster using terrafomr and make all steps we made manually with IaC.
+
+We have 4 terraform files
+	- providers.tf
+	- main.tf
+	- variables.tf
+	- terraform.tfvars
+
+
+Hashicorp Kubernetes provider - https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs
+
+ArgoCD terrafomr provider - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs
+
+ArgoCD cluster resource - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs/resources/cluster
+
+
+providers.tf
+-----------------------------------------------
+terraform {
+  required_providers {
+    kubernetes = {
+      source = "hashicorp/kubernetes"
+      version = "3.0.1"
+    }
+    argocd = {
+      source = "argoproj-labs/argocd"
+      version = "7.12.4"
+    }
+  }
+}
+
+provider "kubernetes" {
+  config_path    = var.config_path
+  config_context = var.config_context
+}
+
+provider "argocd" {
+  alias       = "argocd_server"
+  server_addr = var.server_addr
+  username    = var.username
+  password    = var.password
+  insecure    = var.insecure
+}
+-----------------------------------------------
+
+
+
+
+kubernetes_service_account_v1 - https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/service_account_v1
+
+kubernetes_secret_v1 - https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/secret_v1
+
+kubernetes_cluster_role_binding_v1 - https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/cluster_role_binding_v1
+
+argocd_cluster - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs/resources/cluster
+
+
+main.tf
+-----------------------------------------------
+resource "kubernetes_service_account_v1" "argocd_manager_sa" {		# create kubernetes service account
+  metadata {
+    name      = var.sa_name		# service account name
+    namespace = var.sa_namespace	# service account namespace - default
+  }
+}
+
+resource "kubernetes_secret_v1" "argocd_manager_secret" {	# create kubernetes secret to create and set a token for our sa
+  metadata {
+    name = var.argocd-manager-secret					# secret name
+    annotations = {
+      "kubernetes.io/service-account.name" = "${kubernetes_service_account_v1.argocd_manager_sa.metadata.0.name}"
+    }
+  }
+  type = "kubernetes.io/service-account-token"	# generate token for the "kubernetes_service_account_v1" "argocd_manager_sa"
+}
+
+resource "kubernetes_cluster_role_binding_v1" "argocd_manager_binding" {  # create cluster role binding to bind service account to
+  metadata {								# cluster role called cluster admin
+    name = var.argocd-manager-binding		# set cluster role binding name
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"	# role based access control api group
+    kind      = "ClusterRole"			# set the kind of the binding
+    name      = "cluster-admin"			# set the role we want to bind with the binding
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = kubernetes_service_account_v1.argocd_manager_sa.metadata.0.name		# ref to the sa name
+    namespace = kubernetes_service_account_v1.argocd_manager_sa.metadata.0.namespace	# ref to the sa namespace
+  }
+}
+
+data "kubernetes_secret_v1" "argocd_manager_secret" {		# retrieve external resporce data
+  metadata {
+    name = kubernetes_secret_v1.argocd_manager_secret.metadata.0.name	# take data from the external cluster config
+  }
+}
+
+resource "argocd_cluster" "new_cluster" {	# ArgoCD cluster
+  provider = argocd.argocd_server		# alias of our current ArgoCD server - "lcaolhost:32074"
+  server = var.new_cluster_server_addr		# new cluster IP address
+  name     = "external"				# name the external cluster
+
+  config {	# token from kubernetes_service_account_v1's (argocd_manager_sa) kubernetes_secret_v1 (argocd_manager_secret)
+    bearer_token = "${lookup(data.kubernetes_secret_v1.argocd_manager_secret.data, "token")}"
+
+    tls_client_config {		# use new cluster certificate
+      ca_data  = "${lookup(data.kubernetes_secret_v1.argocd_manager_secret.data, "ca.crt")}"
+      insecure = false		# set secure connection 
+    }
+  }
+}
+-----------------------------------------------
+
+
+
+variables.tf
+-----------------------------------------------
+variable "server_addr" {
+  type        = string
+  description = "The server address"
+}
+
+variable "username" {
+  type        = string
+  description = "The Username"
+}
+
+variable "password" {
+  type        = string
+  description = "The Password"
+}
+
+variable "insecure" {
+  type        = bool
+  description = "The Connection Insecure flag"
+}
+
+variable "sa_name" {
+  type        = string
+  description = "The name of argocd serviceaccount"
+}
+
+variable "sa_namespace" {
+  type        = string
+  description = "The namespace of argocd serviceaccount"
+}
+
+variable "config_path" {
+  type        = string
+  description = "The path of kube config"
+}
+
+variable "config_context" {
+  type        = string
+  description = "The context in kube config"
+}
+
+variable "argocd-manager-binding" {
+  type        = string
+  description = "The name of argocd manager clusterrole binding"
+}
+
+variable "argocd-manager-secret" {
+  type        = string
+  description = "The name of argocd manager secret"
+}
+
+variable "argocd_secret_cluster" {
+  type        = string
+  description = "The name of argocd secret cluster"
+}
+
+variable "secret_labels" {
+  type        = map(string)
+  description = "The Labels of argocd manager secret"
+}
+
+variable "new_cluster" {
+  type        = string
+  description = "The name of new cluster"
+}
+
+variable "new_cluster_server_addr" {
+  type        = string
+  description = "The name of new cluster server address"
+}
+-----------------------------------------------
+
+
+terraform.tfvars
+-----------------------------------------------
+server_addr            = "argocd.localhost:32074"	# ArgoCD host connection address and port
+username               = "admin"			# ArgoCD username
+password               = "password"			# ArgoCD admin password
+insecure               = true
+sa_name                = "argocd-manager-sa"		# set new cluster's service account name
+sa_namespace           = "default"
+config_path            = "~/.kube/config"		# cluster config path
+config_context         = "kind-cluster2"		# new cluster context (as what user, in what cluster and namespace)
+argocd-manager-binding = "argocd-manager-binding"	# new cluster admin binding
+argocd-manager-secret  = "argocd-manager-secret"	# new cluster admin role secret
+argocd_secret_cluster  = "argocd-secret-cluster"	# new cluster secret
+secret_labels = {
+  "argocd.argoproj.io/secret-type" = "cluster"		# type of the resource
+}
+new_cluster             = "cluster2"			# new cluster name
+new_cluster_server_addr = "https://cluster2-control-plane:6443"	# set the new cluster container name and its port
+-----------------------------------------------
+
+Format terrafomr files
+	terminal --> terraform fmt
+
+Download and install providers configurations
+	terminal --> terraform init		# result :Terraform has been successfully initialized!
+
+Validate terraform files
+	terminal --> terraform validate		# result: Success! The configuration is valid.
+
+Plan terraform resources
+	terminal --> terraform plan		# result: Plan: 4 to add, 0 to change, 0 to destroy.
+
+Apply terraform resources
+	terminal --> terraform apply
+	terminal --> yes
+
+	# result: Apply complete! Resources: 4 added, 0 changed, 0 destroyed.
+
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+
+Switch to local cluster context
+	terminal --> kubectl config use-context kind-kind
+
+
+List service account
+	terminal --> k get sa
+
+# result:
+NAME                               SECRETS   AGE
+argocd-manager-sa		   0	     20s		# this is our new service account
+argocd-application-controller      0         11d
+argocd-applicationset-controller   0         11d
+argocd-dex-server                  0         11d
+argocd-notifications-controller    0         11d
+argocd-redis-secret-init           0         11d
+argocd-repo-server                 0         11d
+argocd-server                      0         11d
+default                            0         11d
+new-cluster-sa                     0         15h
+
+
+List secrets
+	terminal --> k get secret -n argocd
+
+NAME                                 TYPE                 			DATA   AGE
+argocd-manager-secret	 	     Kubernetes.io/service-account-token	3      35s	# this is our new secret
+argocd-initial-admin-secret          Opaque               			1      11d
+argocd-notifications-secret          Opaque               			0      11d
+argocd-redis                         Opaque               			1      11d
+argocd-secret                        Opaque               			5      11d
+https-private-repo-secret            Opaque               			4      4d
+https-private-repo-secret-template   Opaque               			4      3d22h
+sh.helm.release.v1.argocd.v1         helm.sh/release.v1   			1      11d
+ssh-private-repo-secret              Opaque               			3      3d23h
+ssh-private-repo-secret-template     Opaque               			3      3d21h
+
+
+List clusters
+	terminal --> argocd cluster list
+
+# result
+SERVER                               NAME      VERSION  STATUS   MESSAGE                                                  PROJECT
+https://cluster2-control-plane:6443  external           Unknown  Cluster has no applications and is not being monitored.
+https://kubernetes.default.svc       local              Unknown  Cluster has no applications and is not being monitored.
+
+When we deploy application the status will be 'Successful'
+
+
+
+
+
+
+12. Install argo rollouts on main (ArgoCD host) cluster
+=======================================================
+
+Installation documentation - https://argo-rollouts.readthedocs.io/en/stable/installation/
+
+Step 1:
+-------
+install.yaml - Standard installation method.
+	Create argo-rollouts namespace
+		terminal --> kubectl create namespace argo-rollouts
+
+		# result: namespace/argo-rollouts created
+
+	Apply argo-rollouts manifest into argo-rollouts namepsace
+		terminal --> kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+		# result:
+		customresourcedefinition.apiextensions.k8s.io/analysisruns.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/analysistemplates.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/clusteranalysistemplates.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/experiments.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/rollouts.argoproj.io created
+		serviceaccount/argo-rollouts created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-admin created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-edit created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-view created
+		clusterrolebinding.rbac.authorization.k8s.io/argo-rollouts created
+		configmap/argo-rollouts-config created
+		secret/argo-rollouts-notification-secret created
+		service/argo-rollouts-metrics created
+		deployment.apps/argo-rollouts created
+
+
+	Confirm components installtion
+		terminal --> kubectl get all -n argo-rollouts
+
+		# result:
+		NAME                                 READY   STATUS    RESTARTS   AGE
+		pod/argo-rollouts-65c8945cc7-zchlm   1/1     Running   0          4m40s
+
+		NAME                            TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+		service/argo-rollouts-metrics   ClusterIP   10.96.238.38   <none>        8090/TCP   4m40s
+
+		NAME                            READY   UP-TO-DATE   AVAILABLE   AGE
+		deployment.apps/argo-rollouts   1/1     1            1           4m40s
+
+		NAME                                       DESIRED   CURRENT   READY   AGE
+		replicaset.apps/argo-rollouts-65c8945cc7   1         1         1       4m40s
+
+
+Step 2:
+-------
+Kubectl Plugin Installation on Windows with shell
+-------------------------------------------------
+
+Install kargo dashboard
+	terminal --> kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/dashboard-install.yaml
+
+	# result:
+	serviceaccount/argo-rollouts-dashboard created
+	clusterrole.rbac.authorization.k8s.io/argo-rollouts-dashboard created
+	clusterrolebinding.rbac.authorization.k8s.io/argo-rollouts-dashboard created
+	service/argo-rollouts-dashboard created
+	deployment.apps/argo-rollouts-dashboard created
+
+	Foreward port for kargo dashboard
+		terminal --> kubectl port-forward -n argo-rollouts svc/argo-rollouts-dashboard 3100:3100
+
+
+Set additional service dashboard-ingress.yaml for dashboard to access it.
+
+dashboard-ingress.yaml
+-----------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-rollouts-dashboard
+  namespace: argo-rollouts
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: rollouts.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-rollouts-dashboard
+            port:
+              number: 3100
+-----------------------------------------------------
+
+Create the service
+	terminal --> kubectl apply -f dashboard-ingress.yaml
+
+	# result: ingress.networking.k8s.io/argo-rollouts-dashboard created
+
+
+
+Confirm components installtion
+	terminal --> kubectl get all -n argo-rollouts
+
+
+	# result:
+	NAME                                           READY   STATUS    RESTARTS   AGE
+	pod/argo-rollouts-65c8945cc7-9rg85             1/1     Running   0          4h13m
+	pod/argo-rollouts-dashboard-5659ccf55b-pxvgh   1/1     Running   0          123m
+
+	NAME                              TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+	service/argo-rollouts-dashboard   ClusterIP   10.96.41.223   <none>        3100/TCP   123m
+	service/argo-rollouts-metrics     ClusterIP   10.96.126.95   <none>        8090/TCP   4h13m
+
+	NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+	deployment.apps/argo-rollouts             1/1     1            1           4h13m
+	deployment.apps/argo-rollouts-dashboard   1/1     1            1           123m
+
+	NAME                                                 DESIRED   CURRENT   READY   AGE
+	replicaset.apps/argo-rollouts-65c8945cc7             1         1         1       4h13m
+	replicaset.apps/argo-rollouts-dashboard-5659ccf55b   1         1         1       123m
+
+
+Add host address to Windows host list
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 rollouts.localhost'
+		- save the file and exit
+
+
+
+STEP 3 
+------
+
+Download kargo-dashboards binary for Windows
+	terminal --> iwr https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-windows-amd64 -OutFile kubectl-argo-rollouts.exe
+
+Create folder
+terminal --> mkdir ~/bin -Force
+Move-Item ./kubectl-argo-rollouts.exe ~/bin/kubectl-argo-rollouts.exe
+
+Add the binary to PATH
+	terminal --> [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\bin", "User")
+
+
+Set Alias for kubectl-argo-rollouts:
+------------------------------------
+Open Power Shell profile AS ADMIN and set alias below. 
+	terminal --> code $PROFILE
+
+-----------------------------------------------------
+# Alias for kubectl
+Set-Alias -Name k -Value kubectl
+
+# Alias for kubectl-argo-rollouts
+Set-Alias -Name kargo -Value kubectl-argo-rollouts	# added
+-----------------------------------------------------
+
+Restart power shell 
+Load Power Shell profile
+	terminal --> . $PROFILE
+
+Verify binary installation
+	termimnal --> kubectl-argo-rollouts version
+	or
+	terminal --> kargo version
+
+# example result: 
+kubectl-argo-rollouts: v1.8.3+49fa151
+  BuildDate: 2025-06-04T22:26:13Z
+  GitCommit: 49fa1516cf71672b69e265267da4e1d16e1fe114
+  GitTreeState: clean
+  GoVersion: go1.23.9
+  Compiler: gc
+  Platform: linux/amd64
+
+
+We can now access Kargo dashboard at http://rollouts.localhost:32073/
+
+
+Open Kargo Dashboard on http://rollouts.localhost:32073/
+      			--------------------------------
+
