@@ -1,0 +1,58 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout                                       # specific manifest type
+metadata:
+  name: blue-green-deployment                       # name of the manifest
+spec:
+  replicas: 4                                       # replica count
+  selector:
+    matchLabels:
+      app: blue-green-deployment                    # label selector
+  template:                                         # pod template
+    metadata:
+      labels:
+        app: blue-green-deployment                  # match the name of the rollout
+    spec:
+      containers:
+      - name: blue-green                            # application name
+        image: blue-green                           # image name
+        imagePullPolicy: Never                      # don't pull the image because we have them locally
+        env:
+        - name: html_name                           # name of environment variable
+          value: "app-v1.html"                      # value of environment variable
+        ports:
+        - containerPort: 5000                       # container port
+  strategy:
+    blueGreen:                                                # blue-green strategy
+      activeService: rollout-bluegreen-active                 # active service
+      previewService: rollout-bluegreen-preview               # preview service
+      autoPromotionEnabled: false                             # auto promotion is disabled. By default it is enabled.
+      # abortScaleDownDelaySeconds: 10
+      # autoPromotionEnabled: false
+      # scaleDownDelaySeconds: 60
+      # previewReplicaCount: 2
+      # autoPromotionSeconds: 20
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-active                              # name of the active service
+spec:
+  selector:
+    app: blue-green-deployment                                # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-preview                            # name of the preview service
+spec:
+  selector:
+    app: blue-green-deployment                               # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000

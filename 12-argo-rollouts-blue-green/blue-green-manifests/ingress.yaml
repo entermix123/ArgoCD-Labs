@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: blue-green-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: blue-green.demo                         # domain name of the host
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rollout-bluegreen-active        # ingress controller is pointing at the active service
+            port:
+              number: 5000
