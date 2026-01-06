@@ -1378,3 +1378,46 @@ We can now access Kargo dashboard at http://rollouts.localhost:32073/
 Open Kargo Dashboard on http://rollouts.localhost:32073/
       			--------------------------------
 
+
+IMPORTANT
+=========
+
+EXPLOANATION ABOUT DOCKER KUBERNETES KIND CLUSTERS COMMUNICATION
+
+Our main (local) cluster is serving ArgoCD and Kargo Dashboard. Its configuration is as follow:
+
+kind-config-nginx.yaml
+-------------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 32073				# this is HTTP
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 32074				# this is HTTPS
+    protocol: TCP
+- role: worker
+- role: worker
+-------------------------------------------------
+
+ArgoCD requires TLS/HTTPS communication and we access it on port 32074 - https://argocd.localhost:32074/applications
+Kargo Dashboard requires HTTP communication and we access it on port 32073 - http://rollouts.localhost:32073/rollouts/
+
+All configured host addresses in C:\Windows\System32\drivers\etc\hosts connected with our cluster application are accessed on port 32073 or 32074 (for local cluster) depending of on which tool we are looking at them (ArgoCD or Kargo) with.
+
+127.0.0.1 argocd.localhost			# this use HTTPS - 32074
+127.0.0.1 rollouts.localhost			# this use HTTP - 32073
+
+
+
+
+
