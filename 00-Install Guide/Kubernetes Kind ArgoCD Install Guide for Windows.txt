@@ -15,7 +15,8 @@ We will go true installing lightweight setup on windows 11 with:
 	8. Install kubectl argo rollouts (kargo)
 	9. Create second Kubernetes Kind cluster
 	10. Adding the second clusters to ArgoCD
-	11. Install argo rollouts on main (ArgoCD host) cluster
+	11. Install Argo Rollouts on main cluster
+	12. Install Argo Workflows on main cluster
 
 
 
@@ -1195,8 +1196,8 @@ When we deploy application the status will be 'Successful'
 
 
 
-12. Install argo rollouts on main (ArgoCD host) cluster
-=======================================================
+11. Install argo rollouts on main cluster
+=========================================
 
 Installation documentation - https://argo-rollouts.readthedocs.io/en/stable/installation/
 
@@ -1416,6 +1417,31 @@ All configured host addresses in C:\Windows\System32\drivers\etc\hosts connected
 
 127.0.0.1 argocd.localhost			# this use HTTPS - 32074
 127.0.0.1 rollouts.localhost			# this use HTTP - 32073
+
+
+
+
+
+12. Install Argo Workflows on main cluster
+==========================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
