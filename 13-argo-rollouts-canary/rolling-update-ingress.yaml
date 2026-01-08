@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress                                 # ingress controller type
+metadata:
+  name: rolling-update
+spec:
+  ingressClassName: nginx                     # nginx controller
+  rules:
+  - host: rolling-update.demo                 # application host address
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rolling-update              # name of the target service defined in the rollout
+            port:
+              number: 5000

@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rollouts-traffic-management                 # ingress controller name 
+spec:
+  ingressClassName: nginx                           # class of the ingress controller
+  rules:
+  - host: rollouts-traffic-management.demo          # domain name of the application
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: stable-service                    # service the controller is working with
+            port:
+              number: 5000

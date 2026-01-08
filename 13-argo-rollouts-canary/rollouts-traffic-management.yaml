@@ -1,0 +1,64 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rollouts-traffic-management              # rollout name
+spec:
+  replicas: 5                                    # default replicas
+  strategy:
+    canary:                                      # canary strategy
+      dynamicStableScale: true                   # dynamic stable scale
+      # abortScaleDownDelaySeconds: 20           # scale down deplay time in case of abortion of the new revision 
+      canaryService: canary-service              # connected canary service
+      stableService: stable-service              # connected stable service
+      trafficRouting:                                  # routing management
+        nginx:
+          stableIngress: rollouts-traffic-management   # connnected nginx ingress controller
+      steps:
+      # - setWeight: 20                                  # Using Setweight Only - 1 of 5 pods on this step
+      # - pause: {}                                      # manual promotion
+      # ....................
+      - setCanaryScale:          # Using SetCanaryScale with SetWeight
+         weight: 40              # 40% of default replicas created as new revision replicaset
+         # replicas: 2           # specify pods insted of weight
+      - setWeight: 40            # 40% of the traffic sent to the new revision replicaset's pods
+      - pause: {}                # manual promotion
+  selector:
+    matchLabels:
+      app: rollouts-traffic-management
+  template:
+    metadata:
+      labels:
+        app: rollouts-traffic-management
+    spec:
+      containers:
+      - name: rollouts-traffic-management
+        image: canary 
+        # This is the same image that we built in the previous session (v12-argo-rollouts-blue-green) , I just re-tagged it
+        imagePullPolicy: Never
+        env:
+        - name: html_name
+          value: "app-v2.html"
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-service                         # service 1 name
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rollouts-traffic-management           # selector for the rollout
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stable-service                         # service 2 name
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rollouts-traffic-management           # selector for the rollout

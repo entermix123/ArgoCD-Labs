@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rolling-update                        # controller name
+spec:
+  ingressClassName: nginx                     # controller type
+  rules:
+  - host: rollouts-setweight.demo             # application host address
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rollouts-setweight          # service name that the contoller will work with
+            port:
+              number: 5000

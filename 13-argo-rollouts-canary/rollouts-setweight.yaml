@@ -1,0 +1,46 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rollouts-setweight
+spec:
+  replicas: 5                              # default replicas
+  strategy:
+    canary:
+      steps:                               # steps section
+      - setWeight: 20                      # percentage of the traffic that will be sent to the new version - 1 of 5 pod
+      - pause: {}                          # require manual promotion
+      - setWeight: 40                      # 2 of 5 pods with new version
+      - pause: {duration: 10s}             # wait time until automatic promotion
+      - setWeight: 60                      # 3 of 5 pods with new version
+      - pause: {duration: 20s}             # wait time until automatic promotion
+      - setWeight: 80                      # 4 of 5 pods with new version
+      - pause: {duration: 1m}              # wait time until automatic promotion
+  selector:
+    matchLabels:
+      app: rollouts-setweight              # selector for the apps
+  template:
+    metadata:
+      labels:
+        app: rollouts-setweight            # label of the app
+    spec:
+      containers:
+      - name: rollouts-setweight           # app name
+        image: canary 
+        # This is the same image that we built in the previous session (v12-argo-rollouts-blue-green) , I just re-tagged it
+        imagePullPolicy: Never
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v2.html"             # environment variable value - change to "app-v2.html" and apply to initiate update
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rollouts-setweight                   # service name
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rollouts-setweight                  # selector for the rollout 

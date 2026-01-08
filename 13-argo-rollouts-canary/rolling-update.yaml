@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rolling-update                      # name of the rollout
+spec:
+  replicas: 5                               # 5 replicas
+  strategy:
+    canary:
+      maxSurge: 2                           # 5 + 2 = 7 pods during the update
+      maxUnavailable: 2                     # 2 of 7 pods can be unavailabe during the update
+  selector:
+    matchLabels:
+      app: rolling-update                   # selector of the update
+  template:
+    metadata:
+      labels:
+        app: rolling-update                 # label lof the app
+    spec:
+      containers:
+      - name: rolling-update                # name the update container
+        image: canary                       # used image
+        # This is the same image that we built in the previous session (v12-argo-rollouts-blue-green) , I just re-tagged it
+        imagePullPolicy: Never              # disable image pulling, we alredy loaded it into the clusters
+        env:
+        - name: html_name                   # environment variable name
+          value: "app-v2.html"              # environment variable value - change to "app-v2.html" to simulate new app version
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1
+kind: Service                       # we use one service pointing on the rollout with the selecotr
+metadata:
+  name: rolling-update              # name of the service
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rolling-update            # selector for the backend (rollout) this service is working for
