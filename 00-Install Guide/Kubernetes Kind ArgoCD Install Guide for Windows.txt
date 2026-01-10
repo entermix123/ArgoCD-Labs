@@ -4,7 +4,7 @@ INSTALL ARGOCD USING HELM CHARTS
 
 We need to install evironment tools depending on what kind of setup we will use for managing Kubernetes clusters.
 
-We will go true installing lightweight setup on windows 11 with:
+We will go true installing lightweight setup on Windows 11 with:
 	1. Docker - container management application
 	2. Kind - application that uses Docker to manage Kubernetes clusters with containers
 	3. Kubectl - Kubernetes CLI 
@@ -17,6 +17,7 @@ We will go true installing lightweight setup on windows 11 with:
 	10. Adding the second clusters to ArgoCD
 	11. Install Argo Rollouts on main cluster
 	12. Install Argo Workflows on main cluster
+	13. Install Argo Workflows CLI on Windows
 
 
 
@@ -1425,11 +1426,281 @@ All configured host addresses in C:\Windows\System32\drivers\etc\hosts connected
 12. Install Argo Workflows on main cluster
 ==========================================
 
+INSTALL ARGO WORKFLOWS WITH HELM
+--------------------------------
+
+This is the official repo for Argo Workflows Helm chart 
+	- https://github.com/argoproj/argo-helm/tree/main/charts/argo-workflows
+
+We are going to use ingress controller so we need to modify values.yaml file used with the chart.
+	- Open the values.yaml - https://github.com/argoproj/argo-helm/blob/main/charts/argo-workflows/values.yaml
+	- Search for 'server' and on line 514 we can find the section. On line 686 we can find 'ingress' subsection.
+		- The 'ingress' controller fucntionality is disabled by default
+
+
+We will overwrite needed fields for this section in our local argo-workflows-values.yaml file and use it to deploy the Argo Workflow Chart.
+
+We also add filed 'extraArgs:' to manage authentication mode from '--auth-mode=client' (default) to '--auth-mode=server'. 
+This will avoid requirements for bearer authentication token when we connect to Argo Workflows.
+
+argo-workflows-values.yaml
+-------------------------------------------------
+server:
+  # -- Extra arguments to provide to the Argo server binary.
+  ## Ref: https://argo-workflows.readthedocs.io/en/stable/argo-server/#options
+  extraArgs:
+    - --auth-mode=server
+  
+  # Argo Workflows server ingress configuration
+  ingress:
+    # -- Enable an ingress resource for the Argo Workflows server
+    enabled: true
+
+    # -- Defines which ingress controller will implement the resource
+    ingressClassName: nginx
+
+    # -- Argo Workflows server hostname
+    hostname: "argo-workflows.localhost"
+-------------------------------------------------
+
+
+Create 'argo' namespace in our cluster
+	terminal --> k create ns argo
+
+	# result: namespace/argo created
+
+Add Argo repository to our system
+	terminal --> helm repo add argo https://argoproj.github.io/argo-helm
+
+Confirm repo addition
+	terminal --> helm repo list
+
+	# result:
+	NAME    URL
+	argo    https://argoproj.github.io/argo-helm
+
+
+Deploy Aego Workflows Helm Chart
+	terminal --> helm install my-workflow argo/argo-workflows -n argo -f argo-workflows-values.yaml
+
+	# helm 					- common helm command
+	# install				- action
+	# my-workflow				- object name
+	# argo/argo-workflows			- used chart
+	# -n argo				- destination namespace
+	# -f argo-workflows-values.yaml		- use argo-workflows-values.yaml custom values
+
+	# result:
+	NAME: my-workflow
+	LAST DEPLOYED: Thu Jan  8 14:02:07 2026
+	NAMESPACE: argo
+	STATUS: deployed
+	REVISION: 1
+	DESCRIPTION: Install complete
+	TEST SUITE: None
+	NOTES:
+	1. Get Argo Server external IP/domain by running:
+
+	kubectl --namespace argo get services -o wide | grep my-workflow-argo-workflows-server
+
+	2. Submit the hello-world workflow by running:
+
+	argo submit https://raw.githubusercontent.com/argoproj/argo-workflows/master/examples/hello-world.yaml --watch
+
+
+List resources deployed in 'argo' namespace
+	terminal --> k get all -n argo
+
+	# result:
+	NAME                                                                  READY   STATUS    RESTARTS   AGE
+	pod/my-workflow-argo-workflows-server-58dd98f67-pnj6f                 1/1     Running   0          16m
+	pod/my-workflow-argo-workflows-workflow-controller-58864d5898-vvspv   1/1     Running   0          16m
+
+	NAME                                        TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
+	service/my-workflow-argo-workflows-server   ClusterIP   10.96.23.4   <none>        2746/TCP   16m
+
+	NAME                                                             READY   UP-TO-DATE   AVAILABLE   AGE
+	deployment.apps/my-workflow-argo-workflows-server                1/1     1            1           16m
+	deployment.apps/my-workflow-argo-workflows-workflow-controller   1/1     1            1           16m
+
+	NAME                                                                        DESIRED   CURRENT   READY   AGE
+	replicaset.apps/my-workflow-argo-workflows-server-58dd98f67                 1         1         1       16m
+	replicaset.apps/my-workflow-argo-workflows-workflow-controller-58864d5898   1         1         1       16m
+
+
+
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 argo-workflows.localhost'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim etc/hosts
+	- Add '127.0.0.1 argo-workflows.localhost'
+	- save changes and exit - escape, :wq!, enter
+
+
+We can now access our Argo Worflows UI on https://argo-workflows.localhost:32074/
+
+
+I receive this error:
+
+Failed to load version/info Error: {"code":16,"message":"token not valid. see https://argo-workflows.readthedocs.io/en/latest/faq/"}
 
 
 
 
 
+INSTALL ARGO WORKFLOW MANUALLY
+------------------------------
+
+We need to uninstall any other Argo Workflow installation to proceed with this instruction.
+
+Create 'argo' namespace for Argo Workflows
+	terminal --> k create ns argo
+
+	# result: namespace/argo created
+
+Deploy Argo Workflows manifests
+	terminal --> kubectl apply -n argo -f https://github.com/argoproj/argo-workflows/releases/latest/download/install.yaml
+
+	# result:
+	customresourcedefinition.apiextensions.k8s.io/clusterworkflowtemplates.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/cronworkflows.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workflowartifactgctasks.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workfloweventbindings.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workflows.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workflowtaskresults.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workflowtasksets.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workflowtemplates.argoproj.io created
+	serviceaccount/argo created
+	serviceaccount/argo-server created
+	role.rbac.authorization.k8s.io/argo-role created
+	clusterrole.rbac.authorization.k8s.io/argo-aggregate-to-admin created
+	clusterrole.rbac.authorization.k8s.io/argo-aggregate-to-edit created
+	clusterrole.rbac.authorization.k8s.io/argo-aggregate-to-view created
+	clusterrole.rbac.authorization.k8s.io/argo-cluster-role created
+	clusterrole.rbac.authorization.k8s.io/argo-server-cluster-role created
+	rolebinding.rbac.authorization.k8s.io/argo-binding created
+	clusterrolebinding.rbac.authorization.k8s.io/argo-binding created
+	clusterrolebinding.rbac.authorization.k8s.io/argo-server-binding created
+	configmap/workflow-controller-configmap created
+	service/argo-server created
+	priorityclass.scheduling.k8s.io/workflow-controller created
+	deployment.apps/argo-server created
+	deployment.apps/workflow-controller created
+
+
+Confirm successfull installation
+	terminal --> k get all -n argo
+
+	# result:
+	NAME                                      READY   STATUS    RESTARTS   AGE
+	pod/argo-server-744f7588b8-tnqh4          1/1     Running   0          52s
+	pod/workflow-controller-6c84fcfb6-d2f9l   1/1     Running   0          52s
+
+	NAME                  TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+	service/argo-server   ClusterIP   10.96.232.144   <none>        2746/TCP   52s
+
+	NAME                                  READY   UP-TO-DATE   AVAILABLE   AGE
+	deployment.apps/argo-server           1/1     1            1           52s
+	deployment.apps/workflow-controller   1/1     1            1           52s
+
+	NAME                                            DESIRED   CURRENT   READY   AGE
+	replicaset.apps/argo-server-744f7588b8          1         1         1       52s
+	replicaset.apps/workflow-controller-6c84fcfb6   1         1         1       52s
+
+
+Set ingress controller for permanent access without port forwarding for test purposes
+
+
+argo-workflows-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-workflows
+  namespace: argo
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: argo-workflows.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-server
+            port:
+              number: 2746
+-------------------------------------------------
+
+Deploy the argo-workflows-ingress.yaml controller
+	terminal --> k apply -f argo-workflows-ingress.yaml
+
+	# result: ingress.networking.k8s.io/argo-workflows created
+
+
+Patch the argo workflow server to avoid authentication (NOT FOR PRODUCTION !)
+	shell terminal --> kubectl patch deployment argo-server -n argo --type='json' -p='[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value": ["server", "--auth-mode=server"]}]'
+
+	# result: deployment.apps/argo-server patched
+
+
+Add host address to Windows host list
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 argo-workflows.localhost'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim etc/hosts
+	- Add '127.0.0.1 argo-workflows.localhost'
+	- save changes and exit - escape, :wq!, enter
+
+
+We can now access our Argo Worflows UI on https://argo-workflows.localhost:32074/
+
+
+
+
+
+
+13. Install Argo Workflows CLI on Windows with Shell
+====================================================
+
+1. Download latest version from the official repository:
+	- Go to official Argo CLI repo - and download latest stable version
+	- Extract it in Downloads folder (you'll get argo-windows-amd64 file)
+	- Move the file to C://Users/username					# fix the username
+
+2. Rename the file 
+	terminal --> Rename-Item -Path "C:\Users\balab\argo-windows-amd64.exe" -NewName "argo.exe"
+
+
+2. Add to PATH with PowerShell
+	- Run PowerShell as Administrator, fix your username path and execute the command
+		terminal --> [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\username", "User")
+
+	# fix the folder path ";C:\Users\username\bin" - set correct username
+
+3. Restrat shell and verify Argo CLI installation
+	terminal --> argo version
+
+	# result:
+	argo: v4.0.0-rc2
+  	BuildDate: 2025-12-22T16:07:52Z
+  	GitCommit: 5f7c7ec6f5f6d6589a2c0cbc20acd79ca078f76f
+  	GitTreeState: clean
+  	GitTag: v4.0.0-rc2
+  	GoVersion: go1.24.11
+  	Compiler: gc
+  	Platform: windows/amd64
 
 
 
