@@ -1675,12 +1675,12 @@ We can now access our Argo Worflows UI on https://argo-workflows.localhost:32074
 ====================================================
 
 1. Download latest version from the official repository:
-	- Go to official Argo CLI repo - and download latest stable version
+	- Go to official Argo CLI repo - and download latest stable version - https://github.com/argoproj/argo-workflows/releases
 	- Extract it in Downloads folder (you'll get argo-windows-amd64 file)
 	- Move the file to C://Users/username					# fix the username
 
 2. Rename the file 
-	terminal --> Rename-Item -Path "C:\Users\balab\argo-windows-amd64.exe" -NewName "argo.exe"
+	terminal --> Rename-Item -Path "C:\Users\usernemae\argo-windows-amd64.exe" -NewName "argo.exe"	# fix the username
 
 
 2. Add to PATH with PowerShell
