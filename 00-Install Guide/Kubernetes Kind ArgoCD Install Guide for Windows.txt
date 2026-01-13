@@ -18,6 +18,7 @@ We will go true installing lightweight setup on Windows 11 with:
 	11. Install Argo Rollouts on main cluster
 	12. Install Argo Workflows on main cluster
 	13. Install Argo Workflows CLI on Windows
+	14. Install MinIO artifacts storage with Helm
 
 
 
@@ -1703,6 +1704,163 @@ We can now access our Argo Worflows UI on https://argo-workflows.localhost:32074
   	Platform: windows/amd64
 
 
+
+
+14. Install MinIO artifacts storage with Helm
+=============================================
+
+MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+
+Prerequisites
+	- kubectl CLI tool
+	- Helm CLI tool
+
+MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+
+INSTALL MINIO WIHT HELM
+-----------------------
+1. Install MinIO helm repository on our PC
+	terminal --> helm repo add minio https://charts.min.io/
+	terminal --> helm repo update
+
+
+2. Install MinIO chart
+	terminal --> helm install argo-artifacts minio/minio --set resources.requests.memory=512Mi --set replicas=1 --set persistence.enabled=false --set mode=standalone --set rootUser=admin --set rootPassword=password123 --set buckets[0].name=my-bucket --set buckets[0].policy=none --set buckets[0].purge=false -n argo
+
+
+3. Create credentials secret in working namespace
+	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n workflows
+
+	# result: secret/my-minio-cred created
+
+4. Set Ingress controller for MinIO to be externally accessed 
+
+minio-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-console-ingress
+  namespace: argo
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: minio.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-artifacts-minio-console
+            port:
+              number: 9001
+-------------------------------------------------
+
+Apply the ingress manifest
+	terminal --> k apply -f minio-ingress.yaml
+
+	# result: ingress.networking.k8s.io/minio-console-ingress created
+
+	
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 minio.localhost'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim etc/hosts
+	- Add '127.0.0.1 minio.localhost'
+	- save changes and exit - escape, :wq!, enter
+
+
+Check MinIO pod
+	terminal --> kubectl get pods -n argo -l release=argo-artifacts
+
+Check MinIO services
+	terminal --> kubectl get svc -n argo -l release=argo-artifacts
+
+Check secret
+	terminal --> kubectl get secret my-minio-cred -n workflows
+
+Check Ingress
+	terminal --> kubectl get ingress minio-console-ingress -n argo
+
+
+ACCESS MINIO
+------------
+Find the secret for account access
+	terminal --> k get secret -n argo
+
+	# result: 
+	NAME                                   TYPE                 DATA   AGE
+	argo-artifacts-minio                   Opaque               2      15m	# target secret
+
+We can print the secret and see the json paths
+	terminal --> k get secret argo-artifacts-minio -n argo -o yaml
+
+Decode the username (rootUser) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootUser}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: admin
+
+Decode the password (rootPassword) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootPassword}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: password123
+
+
+Access the MinIO app on http://minio.localhost:32073/login
+	- admin
+	- password123
+
+We can create bucket if we haven't with the installation command.
+Create a bucket named 'my-bucket'. We will store our artifacts in this bucket.
+
+
+USE MINIO
+---------
+To use artifacts we need to configure MinIO repository to store the artifacts from the working namespace. MinIO repository is configured in minio-artifact-repo-cm.yaml configmap file below.
+
+minio-artifact-repo-cm.yam
+-------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # If you want to use this config map by default, name it "artifact-repositories". Otherwise, you can provide a reference to a
+  # different config map in `artifactRepositoryRef.configMap` in the workflow.
+  name: artifact-repository           # this name is not the default name
+  annotations:
+    # v3.0 and after - if you want to use a specific key, put that key into this annotation.
+    workflows.argoproj.io/default-artifact-repository: minio-artifact-repo
+data:
+  minio-artifact-repo: |
+    s3:
+      bucket: my-bucket
+      endpoint: argo-artifacts-minio.argo:9000
+      insecure: true
+      accessKeySecret:
+        name: my-minio-cred
+        key: access-key 
+      secretKeySecret:
+        name: my-minio-cred
+        key: secret-key
+-------------------------------------------------
+
+Create the configmap into the working namespace
+	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n workflows
+
+	# result: configmap/artifact-repository created
+
+Confirm ConfigMap creation
+	terminal --> kubectl get configmap artifact-repository -n workflows
+
+	# result:
+	NAME                  DATA   AGE
+	artifact-repository   1      104m
+
+	
 
 
 
