@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: hardwired-artifact-               # Name of this Workflow is created with suffix "-<random number>"
+spec:
+  entrypoint: hardwired-artifact                  # Defines "hardwired-artifact" as the "main" template
+  templates:
+  - name: hardwired-artifact                      # Defining the "hardwired artifact" as a Template Invocator
+    inputs:                                       # Defining the input artifacts
+      artifacts:
+      # Check out the main branch of the argo repo and place it at /devopshobies
+      # revision can be anything that git checkout accepts: branch, commit, tag, etc.
+      - name: argo-source
+        path: /devopshobbies
+        git:
+          repo: https://github.com/entermix123/ArgoCD-Labs        # url to the argocd lab repo
+          revision: "main"                                        # revision of the argocd lab repo, can be branch, commit, tag, etc.
+      # Download docker-compose v2.29.2 and place it at /usr/local/bin/
+      - name: docker-compose                                      # name of the docker-compose artifact
+        path: /usr/local/bin/docker-compose                       # path to the docker-compose binary
+        mode: 0755                                                # mode of the docker-compose binary
+        http:
+          url: https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-linux-x86_64        # url to the docker-compose binary
+    container:
+      image: alpine                               # Alpine is used as the base image
+      command: [sh, -c]                           # Command to run in the container
+      args: ["ls -l /devopshobbies /usr/local/bin/docker-compose"]           # Arguments to the command

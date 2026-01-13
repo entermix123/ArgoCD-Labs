@@ -1,0 +1,11 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate                  # type
+metadata:
+  name: argo-wf-template                # workflow name
+spec:
+  templates:                            # list of templates
+    - name: container-template          # template name
+      container:
+        image: alpine                   # container image
+        command: ["/bin/sh", "-c"]
+        args: ["echo hello from workflow-template"]

@@ -1,0 +1,16 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: argo-cluster-wf-template
+spec:
+  templates:
+    - name: container-template
+      # inputs:
+      #   parameters:
+      #     - name: message
+            # value: "hello from workflow template inputs.parameters.message"
+      container:
+        image: alpine
+        command: ["/bin/sh", "-c"]
+        # args: ["echo {{inputs.parameters.message}}"]         # use the message in the inputs section
+        args: ["echo {{workflow.parameters.message}}"]         # use the message in the main workflow spec section

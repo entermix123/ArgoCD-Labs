@@ -1,0 +1,44 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-wf-                      # auto generate name suffixed with random string
+spec:
+  entrypoint: dag-template
+  templates:
+  - name: dag-template
+    dag:
+      tasks:
+        - name: A
+          templateRef:                        # we are using template definition reference
+            name: argo-wf-template            # name of the template we are refering
+            template: container-template      # name of the template we are refering
+        - name: B
+          template: script-template
+          dependencies: [A]
+        - name: C
+          template: resource-template
+          dependencies: [A]
+        - name: D
+          template: suspend-template
+          dependencies: [B, C]
+  - name: script-template
+    script:
+      image: python:alpine3.6
+      command: [python]
+      source: |
+        import random
+        i = random.randint(1, 10)
+        print(i)
+  - name: resource-template
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          generateName: argo-wf-resource-template-cm-
+        data:
+          created_by: argo-wrkflows
+  - name: suspend-template
+    suspend:
+      duration: "20s"

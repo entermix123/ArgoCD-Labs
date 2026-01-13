@@ -1,0 +1,93 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-wf-  # Name of this Workflow is created with suffix "-<random number>"
+spec:
+  artifactRepositoryRef:
+    configMap: artifact-repository                   # this name is not the default name
+    # Defining a specific artifact repository for a workflow. 
+    # If the name of the artifact repository configmap is artifact-repositories (default name)
+    # We can delete this fields - 'artifactRepositoryRef:configMap: artifact-repository'
+  arguments:
+  entrypoint: dag-template       # Defines "dag-template" as the "main" template
+  templates:
+  - name: dag-template           # Defining the "dag template" as a Template Invocator, You must use one of "dag" or "steps" as a template invocator
+    dag:
+      tasks:
+        - name: A
+          template: container-template
+          arguments:
+        - name: B
+          template: script-template          # generate a ranodm number in this step/task and save it into a file
+          dependencies: [A]
+        - name: C
+          template: resource-template        # create a configmap (not connected to this case)
+          dependencies: [A, B]
+        - name: D
+          template: script-template-new      # the new script template that reads the created random number from the file
+          dependencies: [A, B, C]
+          arguments:                         # arguments section as input
+            artifacts:                       # artifacts
+              - name: random_num_in          # name of the artifact (the file with the number)
+                from: "{{tasks.B.outputs.artifacts.random_num_out}}"    # read the number from task B output
+        - name: E                            # delay step/tasks
+          template: delay-template
+          dependencies: [A, B, C, D]
+# - name: steps-template # Defining the "steps template" as a Template Invocator, You must use one of "dag" or "steps" as a template invocator
+#   steps:
+#   - - name: step1
+#       template: container-template
+#   - - name: step2a
+#       template: script-template
+#     - name: step2b
+#       template: resource-template
+#   - - name: step3
+#       template: delay-template
+
+
+  - name: container-template                          # Defining the "container template" as a Template Definition
+    container:
+      image: alpine
+      command: ["/bin/sh", "-c"]
+      args: ["echo hello from container template"]
+  - name: script-template                             # Defining the "script template" as a Template Definition
+    script:
+      image: python:alpine3.6
+      command: [python]            # python script that will generate a ranodm number and save it in a file
+      source: |
+        import random
+        i = random.randint(1, 100)
+        with open('/tmp/rand-num.txt', 'w') as f:
+            f.write(str(i))
+        # print(i)
+    outputs:                       # output
+      artifacts:                   # output type is artifact
+        - name: random_num_out     # name of the artifact
+          path: /tmp/rand-num.txt  # path of the artifact - the number is saved in this file
+  - name: resource-template                           # Defining the "resource template" as a Template Definition
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          generateName: argo-wf-resource-template-cm-
+        data:
+          created_by: argo-workflows
+  - name: script-template-new                         # Defining the "script template new" as a Template Definition
+    inputs:                         # input
+      artifacts:                    # input type is artifact
+        - name: random_num_in       # name of the artifact (file)
+          path: /tmp/rand.txt       # path of the artifact - can be different from the output path in the script-template definition
+    script:
+      image: python:alpine3.6
+      command: [python]    
+      # python script that opens the file and reads the value and print it. 
+      # Tha path of the fle must be the same as the input artifact (in the same script-template-new definition)
+      source: |
+        with open('/tmp/rand.txt', 'r') as f:
+            number = f.read()
+        print(number)
+  - name: delay-template                              # Defining the "delay template" as a Template Definition
+    suspend:
+      duration: "20s"

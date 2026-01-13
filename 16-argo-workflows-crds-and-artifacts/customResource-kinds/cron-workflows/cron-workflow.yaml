@@ -1,0 +1,49 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow                    # type of CRD
+metadata:
+  generateName: argo-cron-wf-         # auto-generated name with suffix
+spec:
+  schedules: 
+    - "* * * * *"                     # cron expression for scheduling - runs every 1 minute
+  suspend: false                      # false by default. If true cron workflow will not be triggered
+  concurrencyPolicy: "Allow"          # run only one workflow at a time - can be "Allow", "Forbid" or "Replace".
+  # "Replace" will terminate the previous workflow.
+  # "Forbid" weill not allow two workflows to run at the same time, so the second one will wait for the first one to finish
+  startingDeadlineSeconds: 0          # 0 by default - seconds after which the missed workflow will be started after the previous one has finished
+  successfulJobsHistoryLimit: 2       # keep last 2 successful runs (3 by default)
+  failedJobsHistoryLimit: 2           # keep last 2 failed runs (1 by default)
+  workflowSpec:
+    entrypoint: dag-template
+    templates:
+    - name: dag-template
+      dag:
+        tasks:
+          - name: A
+            template: script-template
+          - name: B
+            template: resource-template
+            dependencies: [A]
+          - name: C
+            template: suspend-template
+            dependencies: [A, B]
+    - name: script-template
+      script:
+        image: python:alpine3.6
+        command: [python]
+        source: |
+          import random
+          i = random.randint(1, 10)
+          print(i)
+    - name: resource-template
+      resource:
+        action: create
+        manifest: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            generateName: argo-wf-resource-template-cm-
+          data:
+            created_by: argo-wrkflows
+    - name: suspend-template
+      suspend:
+        duration: "20s"
