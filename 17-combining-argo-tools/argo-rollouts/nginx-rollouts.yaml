@@ -3,18 +3,18 @@ kind: Rollout
 metadata:
   name: nginx-rollouts
 spec:
-  replicas: 5
+  replicas: 5                       # number of replicas
   strategy:
-    canary:
+    canary:                         # canary deployment strategy
       steps:
-      - setWeight: 20
-      - pause: {}
-      - setWeight: 40
-      - pause: {duration: 10s}
-      - setWeight: 60
-      - pause: {duration: 20s}
-      - setWeight: 80
-      - pause: {duration: 1m}
+      - setWeight: 20               # 20% of traffic (1 of 5 pods)
+      - pause: {}                   # manual promotion
+      - setWeight: 40               # 40% of traffic (2 of 5 pods)
+      - pause: {duration: 10s}      # 10s pause before autoatic promotion
+      - setWeight: 60               # 60% of traffic (3 of 5 pods)
+      - pause: {duration: 20s}      # 20s pause before autoatic promotion
+      - setWeight: 80               # 80% of traffic (4 of 5 pods)
+      - pause: {duration: 1m}       # 1min pause before autoatic promotion
   selector:
     matchLabels:
       app: nginx-rollouts
@@ -25,11 +25,11 @@ spec:
     spec:
       containers:
       - name: nginx-rollouts
-        image: 192.168.1.2:8085/nginx:130a5b21-3166-4ab7-a27c-51f64a198f35
+        image: host.docker.internal:8085/nginx:v1               # automatically changed version when app change is commited
         ports:
         - containerPort: 80
 ---
-apiVersion: v1
+apiVersion: v1                  # backend service of the rollout
 kind: Service
 metadata:
   name: nginx-service

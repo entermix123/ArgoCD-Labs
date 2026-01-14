@@ -5,16 +5,16 @@ metadata:
   namespace: argocd
 spec:
   destination:
-    namespace: argo-demo
-    server: https://kubernetes.default.svc
-  project: default
+    namespace: argo-demo                          # destination namespace
+    server: https://kubernetes.default.svc        # default kubernetese cluster
+  project: default                                # project
   source:
-    path: 17-combining-argo-tools/argo-rollouts
-    repoURL: https://github.com/entermix123/ArgoCD-Labs
-    targetRevision: main
+    path: 17-combining-argo-tools/argo-rollouts                 # path of application rollouts manifests. If changes are detected they will be applied on the cluster
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git     # path to the argocd lab repo
+    targetRevision: main                                        # use main branch as source version. can be commit hash, tag or branch
   syncPolicy:
     syncOptions:
-      - CreateNamespace=true
-    automated:
-      prune: true
-      selfHeal: true
+      - CreateNamespace=true                      # automated namespace creation
+    automated:                                    # automated sync
+      prune: true                                 # enable prune - delete application resources if no longer present in git
+      selfHeal: true                              # enable self-healing

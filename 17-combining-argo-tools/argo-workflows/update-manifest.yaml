@@ -3,6 +3,12 @@ kind: WorkflowTemplate
 metadata:
   name: update-manifest-wf-template
 spec:
+  arguments:
+    parameters:                     # set parameters
+      - name: github-username
+      - name: github-token
+      - name: nexus-registry
+      - name: branch
   templates:
     - name: update-manifest
       inputs:
@@ -11,12 +17,13 @@ spec:
           path: /tmp/source
       script:
         image: alpine/git
-        workingDir: /tmp/source/v17-combining-argo-tools/argo-rollouts
+        workingDir: /tmp/source/17-combining-argo-tools/argo-rollouts           # set manifests dir as working dir
         command: [sh]
         source: |
-          sed -i s'/image:.*/image: {{workflow.parameters.nexus-registry}}\/nginx:{{workflow.uid}}/' nginx-rollouts.yml
-          git config user.name "USERNAME"
-          git config user.email "EMAIL"
+          sed -i 's|image:.*|image: {{workflow.parameters.nexus-registry}}/nginx:{{workflow.uid}}|' nginx-rollouts.yml
+          git config user.name "{{workflow.parameters.github-username}}"
+          git config user.email "{{workflow.parameters.github-username}}@users.noreply.github.com"
+          git remote set-url origin https://{{workflow.parameters.github-username}}:{{workflow.parameters.github-token}}@github.com/entermix123/ArgoCD-Labs.git
           git add .
           git commit -m "image.tag has been changed to {{workflow.uid}}"
           git push origin {{workflow.parameters.branch}}
