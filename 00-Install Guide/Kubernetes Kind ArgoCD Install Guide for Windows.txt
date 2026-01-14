@@ -1548,13 +1548,6 @@ Add host address to Windows host list on Linux
 We can now access our Argo Worflows UI on https://argo-workflows.localhost:32074/
 
 
-I receive this error:
-
-Failed to load version/info Error: {"code":16,"message":"token not valid. see https://argo-workflows.readthedocs.io/en/latest/faq/"}
-
-
-
-
 
 INSTALL ARGO WORKFLOW MANUALLY
 ------------------------------
@@ -1894,10 +1887,31 @@ Confirm ConfigMap creation
 	Find the initial generated credentials in the installed directory 'sonatype-work\nexus3\admin.password' or with shell
 		terminal --> type E:\Installed\nexus-3.88.0-08-win-x86_64\sonatype-work\nexus3\admin.password
 
-	Login to the app
+	Login to the app and finish the installtion. Relogin.
 		Username: admin
-		Password: password
+		Password: admin123		(default)
 
+
+Create Nexus repository - example usage
+---------------------------------------
+- Open Nexus - http://localhost:8081
+- Go to Settings/Repositories/Create Repository/docker(hosted)
+	- Name: argo-demo
+	- Other Connectors
+		- HTTP: 8085
+	- Docker Registry API Support
+		Select Checkbox "Allow clients to use the V1 API to interact with this repository"
+	- Create Repository
+
+Configure Docker Desktop to communicate with the created repository
+	- Open Docker/Settings/Docker Engine
+	- Add
+	-------------------------------------------------
+	{
+	  "insecure-registries": ["localhost:8085"]
+	}
+	-------------------------------------------------
+	- Apply and Restart
 
 
 
