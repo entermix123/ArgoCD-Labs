@@ -4,6 +4,8 @@ INSTALL ARGOCD USING HELM CHARTS
 
 We need to install evironment tools depending on what kind of setup we will use for managing Kubernetes clusters.
 
+We will work with Power Shell CLI for each terminal command included in the instructions.
+
 We will go true installing lightweight setup on Windows 11 with:
 	1. Docker - container management application
 	2. Kind - application that uses Docker to manage Kubernetes clusters with containers
@@ -19,6 +21,7 @@ We will go true installing lightweight setup on Windows 11 with:
 	12. Install Argo Workflows on main cluster
 	13. Install Argo Workflows CLI on Windows
 	14. Install MinIO artifacts storage with Helm
+	15. Install Nexus private image registry
 
 
 
@@ -1865,13 +1868,35 @@ Confirm ConfigMap creation
 
 
 
+15. Install Nexus private image registry
+========================================
 
+1. Download and install Java from: https://www.oracle.com/java/technologies/downloads/#jdk25-windows
 
+	Confirm java installation
+		terminal --> java -version
 
+2 Download Nexus Repository OSS (Open Source) for Windows - https://www.sonatype.com/products/nexus-community-edition-download
 
+3. Install Nexus
+	- unarchive on the PC and navigate to the folder
+	- Open shell as administrator and run
+		terminal --> .\install-nexus-service.bat
 
+4. Start Nexus service
+	terminal --> net start SonatypeNexusRepository
 
+	Check if port 8081 is listening
+		terminal --> netstat -ano | findstr :8081
 
+5. Login to Nexus on http://localhost:8081/#login
+
+	Find the initial generated credentials in the installed directory 'sonatype-work\nexus3\admin.password' or with shell
+		terminal --> type E:\Installed\nexus-3.88.0-08-win-x86_64\sonatype-work\nexus3\admin.password
+
+	Login to the app
+		Username: admin
+		Password: password
 
 
 
