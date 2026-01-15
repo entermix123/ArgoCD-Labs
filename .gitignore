@@ -1,6 +1,8 @@
 .pre-commit-config.yaml
 .cache_ggshield
 
+17-combining-argo-tools/argo-workflows/configs/docker-config.json
+
 # Local .terraform directories
 .terraform/
 
