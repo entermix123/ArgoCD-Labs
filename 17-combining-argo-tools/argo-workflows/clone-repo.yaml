@@ -1,32 +1,16 @@
 apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate                   # manifest type
+kind: WorkflowTemplate
 metadata:
-  name: clone-repo-wf-template           # name of the workflow template
+  name: clone-repo-wf-template
 spec:
   templates:
-    - name: clone-repo                   # template name
-      inputs:
-        parameters:
-          - name: repo-url               # repository url parameter
-      outputs:                           # outputs section
-        artifacts:                       # artifact as output
-        - name: source                   # artifact name - referring to the folder with path below
-          path: /tmp/source              # artifact path - the folder is the artifact. It is containing our repository.
-      script:                            # script section
-        image: alpine/git                # used image
-        command: [sh]                    # used command
-        env:                             # environment variables section
-          - name: GITHUB_USERNAME        # github username from secret
-            valueFrom:
-              secretKeyRef:
-                name: github-credentials # secret name
-                key: username            # secret key
-          - name: GITHUB_TOKEN           # github token from secret
-            valueFrom:
-              secretKeyRef:
-                name: github-credentials # secret name
-                key: token               # secret key
-        source: |                        # script - clone the repo from url to destination path with credentials
-          REPO_URL="{{inputs.parameters.repo-url}}"
-          REPO_WITH_AUTH=$(echo $REPO_URL | sed "s|https://|https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@|")
-          git clone $REPO_WITH_AUTH /tmp/source
+    - name: clone-repo
+      outputs:
+        artifacts:
+        - name: source
+          path: /tmp/source
+      script:
+        image: alpine/git
+        command: [sh]
+        source: |
+          git clone {{workflow.parameters.repo-url}} /tmp/source
