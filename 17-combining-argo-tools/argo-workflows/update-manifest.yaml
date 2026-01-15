@@ -1,24 +1,24 @@
 apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate
+kind: WorkflowTemplate                   # manifest type
 metadata:
-  name: update-manifest-wf-template
+  name: update-manifest-wf-template      # name of the workflow template
 spec:
   templates:
-    - name: update-manifest
+    - name: update-manifest              # template name
       inputs:
-        parameters:                     # set parameters
-          - name: github-username
-          - name: github-token
-          - name: nexus-registry
-          - name: branch
+        parameters:                      # set parameters
+          - name: github-username        # github username parameter
+          - name: github-token           # github token parameter
+          - name: nexus-registry         # nexus registry parameter
+          - name: branch                 # branch parameter
         artifacts:
-        - name: source
-          path: /tmp/source
+        - name: source                   # artifact name
+          path: /tmp/source              # artifact path
       script:
-        image: alpine/git
+        image: alpine/git                # used image
         workingDir: /tmp/source/17-combining-argo-tools/argo-rollouts           # set manifests dir as working dir
-        command: [sh]
-        source: |
+        command: [sh]                    # used command
+        source: |                        # script - update manifest, commit and push changes
           sed -i 's|image:.*|image: {{inputs.parameters.nexus-registry}}/nginx:{{workflow.uid}}|' nginx-rollouts.yml
           git config user.name "{{inputs.parameters.github-username}}"
           git config user.email "{{inputs.parameters.github-username}}@users.noreply.github.com"

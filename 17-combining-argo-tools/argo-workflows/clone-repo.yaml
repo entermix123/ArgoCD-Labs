@@ -7,9 +7,9 @@ spec:
     - name: clone-repo                   # template name
       inputs:
         parameters:
-          - name: github-username
-          - name: github-token
-          - name: repo-url
+          - name: github-username        # github username parameter
+          - name: github-token           # github token parameter
+          - name: repo-url               # repository url parameter
       outputs:                           # outputs section
         artifacts:                       # artifact as output
         - name: source                   # artifact name - referring to the folder with path below
