@@ -14,7 +14,7 @@ We will go true installing lightweight setup on Windows 11 with:
 	5. Helm - Kubernetes extension that help managing manifest files in Kuberentes clusters
 	6. Create Kuberentes Cluster with Kind
 	7. install ArgoCD
-	8. Install Argo Rollouts (kargo)
+	8. Install Argo Rollouts and Kargo CLI
 	9. Create second Kubernetes Kind cluster
 	10. Adding the second clusters to ArgoCD
 	11. Install Argo Workflows on main cluster
@@ -517,8 +517,8 @@ List clusters
 
 
 
-8. Install Argo Rollouts (kargo)
-================================
+8. Install Argo Rollouts and Kargo CLI
+======================================
 
 Installation documentation - https://argo-rollouts.readthedocs.io/en/stable/installation/
 
@@ -1253,13 +1253,15 @@ This is the official repo for Argo Workflows Helm chart
 We are going to use ingress controller so we need to modify values.yaml file used with the chart.
 	- Open the values.yaml - https://github.com/argoproj/argo-helm/blob/main/charts/argo-workflows/values.yaml
 	- Search for 'server' and on line 514 we can find the section. On line 686 we can find 'ingress' subsection.
-		- The 'ingress' controller fucntionality is disabled by default
+		- The 'ingress' controller functionality is disabled by default
 
 
 We will overwrite needed fields for this section in our local argo-workflows-values.yaml file and use it to deploy the Argo Workflow Chart.
 
-We also add filed 'extraArgs:' to manage authentication mode from '--auth-mode=client' (default) to '--auth-mode=server'. 
+We also add field 'extraArgs:' to manage authentication mode from '--auth-mode=client' (default) to '--auth-mode=server'. 
 This will avoid requirements for bearer authentication token when we connect to Argo Workflows.
+We can also overwrite and use 'server/NodePort' section for external access (not in this case).
+
 
 argo-workflows-values.yaml
 -------------------------------------------------
@@ -1298,7 +1300,7 @@ Confirm repo addition
 	argo    https://argoproj.github.io/argo-helm
 
 
-Deploy Aego Workflows Helm Chart
+Deploy Argo Workflows Helm Chart
 	terminal --> helm install my-workflow argo/argo-workflows -n argo -f argo-workflows-values.yaml
 
 	# helm 					- common helm command
@@ -1316,14 +1318,6 @@ Deploy Aego Workflows Helm Chart
 	REVISION: 1
 	DESCRIPTION: Install complete
 	TEST SUITE: None
-	NOTES:
-	1. Get Argo Server external IP/domain by running:
-
-	kubectl --namespace argo get services -o wide | grep my-workflow-argo-workflows-server
-
-	2. Submit the hello-world workflow by running:
-
-	argo submit https://raw.githubusercontent.com/argoproj/argo-workflows/master/examples/hello-world.yaml --watch
 
 
 List resources deployed in 'argo' namespace
@@ -1346,20 +1340,74 @@ List resources deployed in 'argo' namespace
 	replicaset.apps/my-workflow-argo-workflows-workflow-controller-58864d5898   1         1         1       16m
 
 
+Create rolebinding for admin role in 'argo' namespace
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo:default -n argo
 
-Add host address to Windows host list on Windows
-	- Open power Shell as Admin
+	# result: rolebinding.rbac.authorization.k8s.io/default-admin created
+
+Give workflow-controller permissions in working 'argo-events' namespace
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:my-workflow-argo-workflows-workflow-controller -n argo-events
+
+Create rolebinding for admin role in working 'argo-events' namespace
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
+
+Configure Access:
+-----------------
+Create service account in working 'argo-events' namespace
+	terminal --> kubectl create serviceaccount argo-workflows -n argo-events
+
+Create rolebinding for the created service account and give it admin rights
+	terminal --> kubectl create rolebinding argo-workflows-admin --role=cluster-admin --serviceaccount=argo-events:argo-workflows -n argo-events
+
+
+Set ingress controller for permanent access without port forwarding for test purposes
+
+argo-workflows-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-workflows
+  namespace: argo
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: argo-workflows.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-server
+            port:
+              number: 2746
+-------------------------------------------------
+
+Deploy the argo-workflows-ingress.yaml controller
+	terminal --> k apply -f argo-workflows-ingress.yaml -n argo
+
+	# result: ingress.networking.k8s.io/argo-workflows created
+
+
+Add host address to Windows host list
+	- Open PowerShell as Admin
 		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
 		- add '127.0.0.1 argo-workflows.localhost'
 		- save the file and exit
 
-Add host address to Windows host list on Linux
-	terminal --> sudo vim etc/hosts
+Add host address to Linux host list
+	terminal --> sudo vim /etc/hosts
 	- Add '127.0.0.1 argo-workflows.localhost'
 	- save changes and exit - escape, :wq!, enter
 
 
-We can now access our Argo Worflows UI on https://argo-workflows.localhost:32074/
+We can now access our Argo Workflows UI on https://argo-workflows.localhost:32074/
+
+
 
 
 
@@ -1460,6 +1508,20 @@ Patch the argo workflow server to avoid authentication (NOT FOR PRODUCTION !)
 	shell terminal --> kubectl patch deployment argo-server -n argo --type='json' -p='[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value": ["server", "--auth-mode=server"]}]'
 
 	# result: deployment.apps/argo-server patched
+
+Create rolebinding for admin role for installation namespace
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo:default -n argo
+
+Create rolebinding for admin role for working namespace
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
+
+Configure Access:
+-----------------
+Create service account in working 'argo-events' namespace
+	terminal --> kubectl create serviceaccount argo-workflows -n argo-events
+
+Create rolebinding for the created service account and give it admin rights
+	terminal --> kubectl create rolebinding argo-workflows-admin --role=cluster-admin --serviceaccount=argo-events:argo-workflows -n argo-events
 
 
 Add host address to Windows host list
@@ -1663,7 +1725,7 @@ Create the configmap into the working namespace
 	# result: configmap/artifact-repository created
 
 Confirm ConfigMap creation
-	terminal --> kubectl get configmap artifact-repository -n workflows
+	terminal --> kubectl get configmap artifact-repository -n <namespace>
 
 	# result:
 	NAME                  DATA   AGE
@@ -1715,6 +1777,12 @@ Create Nexus repository - example usage
 	- Docker Registry API Support
 		Select Checkbox "Allow clients to use the V1 API to interact with this repository"
 	- Create Repository
+
+- Go to Settings/Security/Realms
+	- Set Docker Bearer Token Realm to Active
+	- Save
+
+ 
 
 Configure Docker Desktop to communicate with the created repository
 	- Open Docker/Settings/Docker Engine
@@ -1834,6 +1902,10 @@ Apply the deamonset
 
 Wait 2 minutes and delete the daemonset
 	terminal --> kubectl delete -f containerd-config-daemonset.yaml
+
+
+Create a Docker secret in the working namespace to grant argo workflows access to push images to the Nexus registry
+	terminal --> kubectl create secret generic docker-config-secret --from-file="$env:USERPROFILE\.docker\config.json" -n argo-events
 
 
 
