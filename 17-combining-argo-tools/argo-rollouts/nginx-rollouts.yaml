@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
       - name: nginx-rollouts
-        image: host.docker.internal:8085/nginx:114d27ca-1852-4fae-a81d-7a68edce156c
+        image: host.docker.internal:8085/nginx:alpine
         ports:
         - containerPort: 80
 ---
