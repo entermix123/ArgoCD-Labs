@@ -5,12 +5,17 @@ metadata:
 spec:
   templates:
     - name: clone-repo                   # template name
+      inputs:
+        parameters:
+          - name: github-username
+          - name: github-token
+          - name: repo-url
       outputs:                           # outputs section
-        artifacts:                       # artifact as aoutput
-        - name: source                   # artifact name - reffering to the folder with path below
+        artifacts:                       # artifact as output
+        - name: source                   # artifact name - referring to the folder with path below
           path: /tmp/source              # artifact path - the folder is the artifact. It is containing our repository.
       script:                            # script section
         image: alpine/git                # used image
         command: [sh]                    # used command
         source: |                        # script - clone the repo from url to destination path with credentials
-          git clone https://{{workflow.parameters.github-username}}:{{workflow.parameters.github-token}}@https://github.com/entermix123/ArgoCD-Labs.git /tmp/source
+          git clone https://{{inputs.parameters.github-username}}:{{inputs.parameters.github-token}}@github.com/entermix123/ArgoCD-Labs.git /tmp/source

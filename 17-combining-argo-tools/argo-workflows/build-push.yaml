@@ -9,6 +9,8 @@ spec:
   templates:
     - name: build-and-push               # template name
       inputs:                            # inputs section
+        parameters:
+          - name: nexus-registry
         artifacts:                       # use artifacts as inputs
         - name: source                   # artifact name
           path: /tmp/source              # artifact path
@@ -41,6 +43,6 @@ spec:
           - --local
           - dockerfile=.
           - --output
-          - type=image,name={{workflow.parameters.nexus-registry}}/nginx:{{workflow.uid}},push=true,registry.insecure=true
+          - type=image,name={{inputs.parameters.nexus-registry}}/nginx:{{workflow.uid}},push=true,registry.insecure=true
         securityContext:
           privileged: true
