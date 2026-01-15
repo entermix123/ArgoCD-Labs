@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: containerd-registry-config
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: containerd-registry-config
+  template:
+    metadata:
+      labels:
+        name: containerd-registry-config
+    spec:
+      hostPID: true
+      hostNetwork: true
+      initContainers:
+      - name: configure-containerd
+        image: alpine:latest
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          
+          # Check if configuration already exists
+          if grep -q "host.docker.internal:8085" /host/etc/containerd/config.toml 2>/dev/null; then
+            echo "Registry configuration already exists, skipping..."
+            exit 0
+          fi
+          
+          # Append registry configuration
+          cat >> /host/etc/containerd/config.toml << 'EOF'
+
+          [plugins."io.containerd.grpc.v1.cri".registry.mirrors."host.docker.internal:8085"]
+            endpoint = ["http://host.docker.internal:8085"]
+          [plugins."io.containerd.grpc.v1.cri".registry.configs."host.docker.internal:8085".tls]
+            insecure_skip_verify = true
+          EOF
+          
+          echo "Configuration added successfully"
+          
+          # Find and restart containerd process
+          CONTAINERD_PID=$(nsenter -t 1 -m -u -i -n -p pgrep containerd | head -n 1)
+          if [ -n "$CONTAINERD_PID" ]; then
+            echo "Sending SIGHUP to containerd (PID: $CONTAINERD_PID)"
+            nsenter -t 1 -m -u -i -n -p kill -HUP $CONTAINERD_PID
+            sleep 2
+            echo "Containerd reloaded"
+          else
+            echo "Warning: Could not find containerd process"
+          fi
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: containerd-config
+          mountPath: /host/etc/containerd
+      containers:
+      - name: pause
+        image: registry.k8s.io/pause:3.9
+        resources:
+          requests:
+            cpu: 1m
+            memory: 4Mi
+      volumes:
+      - name: containerd-config
+        hostPath:
+          path: /etc/containerd
+          type: Directory
+      tolerations:
+      - operator: Exists
