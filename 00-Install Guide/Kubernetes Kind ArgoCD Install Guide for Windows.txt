@@ -14,14 +14,13 @@ We will go true installing lightweight setup on Windows 11 with:
 	5. Helm - Kubernetes extension that help managing manifest files in Kuberentes clusters
 	6. Create Kuberentes Cluster with Kind
 	7. install ArgoCD
-	8. Install kubectl argo rollouts (kargo)
+	8. Install Argo Rollouts (kargo)
 	9. Create second Kubernetes Kind cluster
 	10. Adding the second clusters to ArgoCD
-	11. Install Argo Rollouts on main cluster
-	12. Install Argo Workflows on main cluster
-	13. Install Argo Workflows CLI on Windows
-	14. Install MinIO artifacts storage with Helm
-	15. Install Nexus private image registry
+	11. Install Argo Workflows on main cluster
+	12. Install Argo Workflows CLI on Windows
+	13. Install MinIO artifacts storage with Helm
+	14. Install Nexus private image registry
 
 
 
@@ -274,6 +273,7 @@ Create the secret in the cluster
 We will go over 2 types of Helm ArgoCD installations
 	I. 	Modifying Helm Chart and overwriting argocd server-service to NodePort - values.yaml
 	II. 	Modifying Helm Chart and Nginx ingress-controller and overwriting ingress controller - values-nginx.yaml
+	RECOMMENDED SECOND WAY !
 
 
 I. Modifying Helm Chart and overwriting argocd server-service to NodePort - values.yaml:
@@ -517,8 +517,8 @@ List clusters
 
 
 
-8. Argo-rollouts Installation
-=============================
+8. Install Argo Rollouts (kargo)
+================================
 
 Installation documentation - https://argo-rollouts.readthedocs.io/en/stable/installation/
 
@@ -613,8 +613,8 @@ spec:
               number: 3100
 -----------------------------------------------------
 
-Create the service
-	terminal --> kubectl apply -f dashboard-ingress.yaml
+Create the service for Argo Rollouts
+	terminal --> kubectl apply -f dashboard-ingress.yaml -n argo-rollouts
 
 	# result: ingress.networking.k8s.io/argo-rollouts-dashboard created
 
@@ -684,6 +684,49 @@ Verify binary installation
 	termimnal --> kubectl-argo-rollouts version
 	or
 	terminal --> kargo version
+
+Open Kargo Dashboard on http://rollouts.localhost:32073/
+      			--------------------------------
+
+
+IMPORTANT
+=========
+
+EXPLOANATION ABOUT DOCKER KUBERNETES KIND CLUSTERS COMMUNICATION
+
+Our main (local) cluster is serving ArgoCD and Kargo Dashboard. Its configuration is as follow:
+
+kind-config-nginx.yaml
+-------------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 32073				# this is HTTP
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 32074				# this is HTTPS
+    protocol: TCP
+- role: worker
+- role: worker
+-------------------------------------------------
+
+ArgoCD requires TLS/HTTPS communication and we access it on port 32074 - https://argocd.localhost:32074/applications
+Kargo Dashboard requires HTTP communication and we access it on port 32073 - http://rollouts.localhost:32073/rollouts/
+
+All configured host addresses in C:\Windows\System32\drivers\etc\hosts connected with our cluster application are accessed on port 32073 or 32074 (for local cluster) depending of on which tool we are looking at them (ArgoCD or Kargo) with.
+
+127.0.0.1 argocd.localhost			# this use HTTPS - 32074
+127.0.0.1 rollouts.localhost			# this use HTTP - 32073
+
 
 
 
@@ -1198,236 +1241,7 @@ When we deploy application the status will be 'Successful'
 
 
 
-
-
-
-11. Install argo rollouts on main cluster
-=========================================
-
-Installation documentation - https://argo-rollouts.readthedocs.io/en/stable/installation/
-
-Step 1:
--------
-install.yaml - Standard installation method.
-	Create argo-rollouts namespace
-		terminal --> kubectl create namespace argo-rollouts
-
-		# result: namespace/argo-rollouts created
-
-	Apply argo-rollouts manifest into argo-rollouts namepsace
-		terminal --> kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
-
-		# result:
-		customresourcedefinition.apiextensions.k8s.io/analysisruns.argoproj.io created
-		customresourcedefinition.apiextensions.k8s.io/analysistemplates.argoproj.io created
-		customresourcedefinition.apiextensions.k8s.io/clusteranalysistemplates.argoproj.io created
-		customresourcedefinition.apiextensions.k8s.io/experiments.argoproj.io created
-		customresourcedefinition.apiextensions.k8s.io/rollouts.argoproj.io created
-		serviceaccount/argo-rollouts created
-		clusterrole.rbac.authorization.k8s.io/argo-rollouts created
-		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-admin created
-		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-edit created
-		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-view created
-		clusterrolebinding.rbac.authorization.k8s.io/argo-rollouts created
-		configmap/argo-rollouts-config created
-		secret/argo-rollouts-notification-secret created
-		service/argo-rollouts-metrics created
-		deployment.apps/argo-rollouts created
-
-
-	Confirm components installtion
-		terminal --> kubectl get all -n argo-rollouts
-
-		# result:
-		NAME                                 READY   STATUS    RESTARTS   AGE
-		pod/argo-rollouts-65c8945cc7-zchlm   1/1     Running   0          4m40s
-
-		NAME                            TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
-		service/argo-rollouts-metrics   ClusterIP   10.96.238.38   <none>        8090/TCP   4m40s
-
-		NAME                            READY   UP-TO-DATE   AVAILABLE   AGE
-		deployment.apps/argo-rollouts   1/1     1            1           4m40s
-
-		NAME                                       DESIRED   CURRENT   READY   AGE
-		replicaset.apps/argo-rollouts-65c8945cc7   1         1         1       4m40s
-
-
-Step 2:
--------
-Kubectl Plugin Installation on Windows with shell
--------------------------------------------------
-
-Install kargo dashboard
-	terminal --> kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/dashboard-install.yaml
-
-	# result:
-	serviceaccount/argo-rollouts-dashboard created
-	clusterrole.rbac.authorization.k8s.io/argo-rollouts-dashboard created
-	clusterrolebinding.rbac.authorization.k8s.io/argo-rollouts-dashboard created
-	service/argo-rollouts-dashboard created
-	deployment.apps/argo-rollouts-dashboard created
-
-	Foreward port for kargo dashboard
-		terminal --> kubectl port-forward -n argo-rollouts svc/argo-rollouts-dashboard 3100:3100
-
-
-Set additional service dashboard-ingress.yaml for dashboard to access it.
-
-dashboard-ingress.yaml
------------------------------------------------------
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: argo-rollouts-dashboard
-  namespace: argo-rollouts
-spec:
-  ingressClassName: nginx
-  rules:
-  - host: rollouts.localhost
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: argo-rollouts-dashboard
-            port:
-              number: 3100
------------------------------------------------------
-
-Create the service
-	terminal --> kubectl apply -f dashboard-ingress.yaml
-
-	# result: ingress.networking.k8s.io/argo-rollouts-dashboard created
-
-
-
-Confirm components installtion
-	terminal --> kubectl get all -n argo-rollouts
-
-
-	# result:
-	NAME                                           READY   STATUS    RESTARTS   AGE
-	pod/argo-rollouts-65c8945cc7-9rg85             1/1     Running   0          4h13m
-	pod/argo-rollouts-dashboard-5659ccf55b-pxvgh   1/1     Running   0          123m
-
-	NAME                              TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
-	service/argo-rollouts-dashboard   ClusterIP   10.96.41.223   <none>        3100/TCP   123m
-	service/argo-rollouts-metrics     ClusterIP   10.96.126.95   <none>        8090/TCP   4h13m
-
-	NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
-	deployment.apps/argo-rollouts             1/1     1            1           4h13m
-	deployment.apps/argo-rollouts-dashboard   1/1     1            1           123m
-
-	NAME                                                 DESIRED   CURRENT   READY   AGE
-	replicaset.apps/argo-rollouts-65c8945cc7             1         1         1       4h13m
-	replicaset.apps/argo-rollouts-dashboard-5659ccf55b   1         1         1       123m
-
-
-Add host address to Windows host list
-	- Open power Shell as Admin
-		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
-		- add '127.0.0.1 rollouts.localhost'
-		- save the file and exit
-
-
-
-STEP 3 
-------
-
-Download kargo-dashboards binary for Windows
-	terminal --> iwr https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-windows-amd64 -OutFile kubectl-argo-rollouts.exe
-
-Create folder
-terminal --> mkdir ~/bin -Force
-Move-Item ./kubectl-argo-rollouts.exe ~/bin/kubectl-argo-rollouts.exe
-
-Add the binary to PATH
-	terminal --> [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\bin", "User")
-
-
-Set Alias for kubectl-argo-rollouts:
-------------------------------------
-Open Power Shell profile AS ADMIN and set alias below. 
-	terminal --> code $PROFILE
-
------------------------------------------------------
-# Alias for kubectl
-Set-Alias -Name k -Value kubectl
-
-# Alias for kubectl-argo-rollouts
-Set-Alias -Name kargo -Value kubectl-argo-rollouts	# added
------------------------------------------------------
-
-Restart power shell 
-Load Power Shell profile
-	terminal --> . $PROFILE
-
-Verify binary installation
-	termimnal --> kubectl-argo-rollouts version
-	or
-	terminal --> kargo version
-
-# example result: 
-kubectl-argo-rollouts: v1.8.3+49fa151
-  BuildDate: 2025-06-04T22:26:13Z
-  GitCommit: 49fa1516cf71672b69e265267da4e1d16e1fe114
-  GitTreeState: clean
-  GoVersion: go1.23.9
-  Compiler: gc
-  Platform: linux/amd64
-
-
-We can now access Kargo dashboard at http://rollouts.localhost:32073/
-
-
-Open Kargo Dashboard on http://rollouts.localhost:32073/
-      			--------------------------------
-
-
-IMPORTANT
-=========
-
-EXPLOANATION ABOUT DOCKER KUBERNETES KIND CLUSTERS COMMUNICATION
-
-Our main (local) cluster is serving ArgoCD and Kargo Dashboard. Its configuration is as follow:
-
-kind-config-nginx.yaml
--------------------------------------------------
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-nodes:
-- role: control-plane
-  kubeadmConfigPatches:
-  - |
-    kind: InitConfiguration
-    nodeRegistration:
-      kubeletExtraArgs:
-        node-labels: "ingress-ready=true"
-  extraPortMappings:
-  - containerPort: 80
-    hostPort: 32073				# this is HTTP
-    protocol: TCP
-  - containerPort: 443
-    hostPort: 32074				# this is HTTPS
-    protocol: TCP
-- role: worker
-- role: worker
--------------------------------------------------
-
-ArgoCD requires TLS/HTTPS communication and we access it on port 32074 - https://argocd.localhost:32074/applications
-Kargo Dashboard requires HTTP communication and we access it on port 32073 - http://rollouts.localhost:32073/rollouts/
-
-All configured host addresses in C:\Windows\System32\drivers\etc\hosts connected with our cluster application are accessed on port 32073 or 32074 (for local cluster) depending of on which tool we are looking at them (ArgoCD or Kargo) with.
-
-127.0.0.1 argocd.localhost			# this use HTTPS - 32074
-127.0.0.1 rollouts.localhost			# this use HTTP - 32073
-
-
-
-
-
-12. Install Argo Workflows on main cluster
+11. Install Argo Workflows on main cluster
 ==========================================
 
 INSTALL ARGO WORKFLOWS WITH HELM
@@ -1611,7 +1425,6 @@ Confirm successfull installation
 
 Set ingress controller for permanent access without port forwarding for test purposes
 
-
 argo-workflows-ingress.yaml
 -------------------------------------------------
 apiVersion: networking.k8s.io/v1
@@ -1638,7 +1451,7 @@ spec:
 -------------------------------------------------
 
 Deploy the argo-workflows-ingress.yaml controller
-	terminal --> k apply -f argo-workflows-ingress.yaml
+	terminal --> k apply -f argo-workflows-ingress.yaml -n argo
 
 	# result: ingress.networking.k8s.io/argo-workflows created
 
@@ -1668,7 +1481,7 @@ We can now access our Argo Worflows UI on https://argo-workflows.localhost:32074
 
 
 
-13. Install Argo Workflows CLI on Windows with Shell
+12. Install Argo Workflows CLI on Windows with Shell
 ====================================================
 
 1. Download latest version from the official repository:
@@ -1702,7 +1515,7 @@ We can now access our Argo Worflows UI on https://argo-workflows.localhost:32074
 
 
 
-14. Install MinIO artifacts storage with Helm
+13. Install MinIO artifacts storage with Helm
 =============================================
 
 MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
@@ -1725,7 +1538,7 @@ INSTALL MINIO WIHT HELM
 
 
 3. Create credentials secret in working namespace
-	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n workflows
+	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n <namespace>
 
 	# result: secret/my-minio-cred created
 
@@ -1754,7 +1567,7 @@ spec:
 -------------------------------------------------
 
 Apply the ingress manifest
-	terminal --> k apply -f minio-ingress.yaml
+	terminal --> k apply -f minio-ingress.yaml -n argo
 
 	# result: ingress.networking.k8s.io/minio-console-ingress created
 
@@ -1845,7 +1658,7 @@ data:
 -------------------------------------------------
 
 Create the configmap into the working namespace
-	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n workflows
+	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n <namespace>
 
 	# result: configmap/artifact-repository created
 
@@ -1861,7 +1674,7 @@ Confirm ConfigMap creation
 
 
 
-15. Install Nexus private image registry
+14. Install Nexus private image registry
 ========================================
 
 1. Download and install Java from: https://www.oracle.com/java/technologies/downloads/#jdk25-windows
@@ -1912,6 +1725,115 @@ Configure Docker Desktop to communicate with the created repository
 	}
 	-------------------------------------------------
 	- Apply and Restart
+
+
+
+Configure Argo Workflows to push images to Nexus
+------------------------------------------------
+
+
+We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
+
+Configure Argo Workflows to communicate with Nexus repository
+	- Open Docker/Settings/Docker Engine
+	- Add
+	-------------------------------------------------
+	{
+	  "insecure-registries": ["localhost:8085", "host.docker.internal:8085"]
+	}
+	-------------------------------------------------
+	- Apply and Restart
+
+
+
+Configure Argo Workflows to pull images from Nexus
+--------------------------------------------------
+
+
+Create containerd daemonset configuration
+
+containerd-config-daemonset.yaml
+-------------------------------------------------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: containerd-registry-config
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: containerd-registry-config
+  template:
+    metadata:
+      labels:
+        name: containerd-registry-config
+    spec:
+      hostPID: true
+      hostNetwork: true
+      initContainers:
+      - name: configure-containerd
+        image: alpine:latest
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          
+          # Check if configuration already exists
+          if grep -q "host.docker.internal:8085" /host/etc/containerd/config.toml 2>/dev/null; then
+            echo "Registry configuration already exists, skipping..."
+            exit 0
+          fi
+          
+          # Append registry configuration
+          cat >> /host/etc/containerd/config.toml << 'EOF'
+
+          [plugins."io.containerd.grpc.v1.cri".registry.mirrors."host.docker.internal:8085"]
+            endpoint = ["http://host.docker.internal:8085"]
+          [plugins."io.containerd.grpc.v1.cri".registry.configs."host.docker.internal:8085".tls]
+            insecure_skip_verify = true
+          EOF
+          
+          echo "Configuration added successfully"
+          
+          # Find and restart containerd process
+          CONTAINERD_PID=$(nsenter -t 1 -m -u -i -n -p pgrep containerd | head -n 1)
+          if [ -n "$CONTAINERD_PID" ]; then
+            echo "Sending SIGHUP to containerd (PID: $CONTAINERD_PID)"
+            nsenter -t 1 -m -u -i -n -p kill -HUP $CONTAINERD_PID
+            sleep 2
+            echo "Containerd reloaded"
+          else
+            echo "Warning: Could not find containerd process"
+          fi
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: containerd-config
+          mountPath: /host/etc/containerd
+      containers:
+      - name: pause
+        image: registry.k8s.io/pause:3.9
+        resources:
+          requests:
+            cpu: 1m
+            memory: 4Mi
+      volumes:
+      - name: containerd-config
+        hostPath:
+          path: /etc/containerd
+          type: Directory
+      tolerations:
+      - operator: Exists
+-------------------------------------------------
+
+Apply the deamonset
+	terminal --> kubectl apply -f containerd-config-daemonset.yaml
+
+	# result: daemonset.apps/containerd-registry-config created
+
+Wait 2 minutes and delete the daemonset
+	terminal --> kubectl delete -f containerd-config-daemonset.yaml
 
 
 
