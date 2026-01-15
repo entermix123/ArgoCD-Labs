@@ -1,0 +1,207 @@
+Quick Windows Install - ArgoCD
+
+This instruction is for installing cluster modules on Wiondows included in the work of real life CI/CD pipelines
+	- Kubernetes Kind Cluster
+	- ArgoCD
+	- Argo Rollouts
+	- Argo Workflows
+	- MinIO on the cluster
+
+All prerequisites should be already installed: Docker, Kind, Kubectl, Helm, Nexus, Argo CLI and more from the full instruction - Kubernetes Kind ArgoCD Install Guide for Windows.txt
+
+
+Cluster
+-------
+
+Create cluster 
+	terminal --> kind create cluster --config kind-config-nginx.yaml --image kindest/node:v1.34.0
+
+Set roles for worker nodes
+	terminal --> kubectl label nodes kind-worker kind-worker2 node-role.kubernetes.io/worker= --overwrite
+
+Rename the local cluster with secret
+	terminal --> k apply -f local-secret.yaml
+
+
+ArgoCD
+------
+
+Before installing ArgoCD with nginx ingress controller we need to install nginx deployment
+	terminal --> kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.0/deploy/static/provider/kind/deploy.yaml
+
+Edit the deployment and add '--enable-ssl-passthrough' flag in specs
+	terminal --> k edit deployment ingress-nginx-controller -n ingress-nginx
+
+------------------------------------------------------------
+...
+    spec:
+      containers:
+      - args:
+        - /nginx-ingress-controller
+        - --election-id=ingress-nginx-leader
+        - --controller-class=k8s.io/ingress-nginx
+        - --ingress-class=nginx
+        - --configmap=$(POD_NAMESPACE)/ingress-nginx-controller
+        - --validating-webhook=:8443
+        - --validating-webhook-certificate=/usr/local/certificates/cert
+        - --validating-webhook-key=/usr/local/certificates/key
+        - --watch-ingress-without-class=true
+        - --enable-metrics=false
+        - --publish-status-address=localhost
+        - --enable-ssl-passthrough						# added
+...
+------------------------------------------------------------
+save changes
+
+Install ArgoCD with nginx ingress controller
+	terminal --> helm install argocd argo/argo-cd -f values-nginx-simplified.yaml -n argocd --create-namespace
+
+Find initial password for ArgoCD:
+	shell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+	# result: password 
+
+Connect to the Node with ArgoCD CLI
+	terminal --> argocd login argocd.localhost:32074 --insecure --grpc-web --username admin --password <password>
+
+Wait a minute and access ArgoCD on https://argocd.localhost:32074
+
+
+
+Argo Rollouts
+-------------
+
+Create argo-rollouts namespace
+	terminal --> kubectl create namespace argo-rollouts
+
+Apply argo-rollouts manifest into argo-rollouts namepsace
+	terminal --> kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+Install kargo dashboard
+	terminal --> kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/dashboard-install.yaml
+
+Create the service for Argo Rollouts
+	terminal --> kubectl apply -f dashboard-ingress.yaml -n argo-rollouts
+
+Open Kargo Dashboard on http://rollouts.localhost:32073/
+
+
+Argo Workflows
+--------------
+
+Create 'argo' namespace in our cluster
+	terminal --> k create ns argo
+
+Deploy Aego Workflows Helm Chart
+	terminal --> helm install my-workflow argo/argo-workflows -n argo -f argo-workflows-values.yaml
+
+
+Wait a minute and access our Argo Worflows UI on https://argo-workflows.localhost:32074/
+
+
+MinIO
+-----
+
+Install MinIO chart
+	terminal --> helm install argo-artifacts minio/minio --set resources.requests.memory=512Mi --set replicas=1 --set persistence.enabled=false --set mode=standalone --set rootUser=admin --set rootPassword=password123 --set buckets[0].name=my-bucket --set buckets[0].policy=none --set buckets[0].purge=false -n argo
+
+Apply ingress manifest
+	terminal --> k apply -f minio-ingress.yaml -n argo
+
+Create Working namespace
+	terminal --> k create ns argo-events
+
+Create credentials secret in working namespace
+	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n argo-events
+
+Create the configmap into the working namespace
+	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n argo-events
+
+Use MinIO
+---------
+
+Find Creadentials:
+
+We can print the secret and see the json paths
+	terminal --> k get secret argo-artifacts-minio -n argo -o yaml
+
+Decode the username (rootUser) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootUser}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: admin
+
+Decode the password (rootPassword) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootPassword}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: password123
+
+Access the MinIO app on http://minio.localhost:32073/login
+
+
+Configure all nodes to pull images from nexus
+---------------------------------------------
+Configure nodes to pull images
+	terminal --> kubectl apply -f containerd-config-daemonset.yaml
+
+Wait a minute and check connuctivity
+	terminal --> kubectl get nodes
+
+Wait a minute and delete the daemonset
+	terminal --> kubectl delete daemonset containerd-registry-config -n kube-system
+
+
+
+Proceed with the CI/CD pipeline
+===============================
+
+Set the default namespace
+	terminal --> k config set-context --current --namespace=argo-events
+
+Check the default namespace
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       argo-events	# current namespace
+
+
+GENERATE GITHUB CREDENTIALS
+---------------------------
+
+We need to provide GitHub credentials to our workflow to access the application repository and manage it - clone it, make changes to the manifests etc.
+
+Login to GitHub - https://github.com/
+Go to https://github.com/settings/tokens
+	- Generate New Token (classic)
+		- Name: argo-workflows
+		- Scope
+			- repo - Full control of private repositories 
+			- workflow - Update GitHub Action workflows (Optional)
+		- Generate Token
+	- Copy the value (save it safe temporary)
+
+Create local environment variables with GitHub Username and Token
+	terminal --> $GITHUB_USERNAME = "argo-workflows"
+	terminal --> $GITHUB_TOKEN = "generated_token"
+
+
+Create secret in our installation namespace to use GitHub credentials safetly
+	terminal --> kubectl create secret generic github-credentials --from-literal=username=$GITHUB_USERNAME --from-literal=token=$GITHUB_TOKEN -n argo
+
+
+Create Docker secret
+	terminal --> kubectl create secret generic docker-config-secret --from-file="$env:USERPROFILE\.docker\config.json" -n argo
+
+	# result: secret/docker-config-secret created
+
+
+
+
+Nexsus
+------
+
+Login to Nexus on http://localhost:8081/#login
+
+
+
