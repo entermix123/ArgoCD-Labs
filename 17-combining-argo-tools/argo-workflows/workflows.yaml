@@ -13,16 +13,6 @@ spec:
         value: main                                   # branch name
       - name: nexus-registry                          # registry name
         value: host.docker.internal:8085              # url of the nexus repository
-      - name: github-username                    # use github username from secret
-        valueFrom:
-          secretKeyRef:
-            name: github-credentials             # secret name
-            key: username                        # secret key
-      - name: github-token                       # use github token from secret
-        valueFrom:
-          secretKeyRef:
-            name: github-credentials             # secret name
-            key: token                           # secret key
   artifactRepositoryRef:
     configMap: artifact-repository                    # reference of the configmap
   entrypoint: ci                                      # entrypoint
@@ -34,6 +24,21 @@ spec:
         templateRef:
           name: clone-repo-wf-template                   # name of the workflow template
           template: clone-repo                           # name of the manifest of the workflow template
+        arguments:
+          parameters:
+            - name: github-username                      # use github username from secret
+              valueFrom:
+                secretKeyRef:
+                  name: github-credentials               # secret name
+                  key: username                          # secret key
+            - name: github-token                         # use github token from secret
+              valueFrom:
+                secretKeyRef:
+                  name: github-credentials               # secret name
+                  key: token                             # secret key
+            - name: repo-url
+              value: "{{workflow.parameters.repo-url}}"
+      
       - name: build-push-task                            # task name
         templateRef:
           name: build-push-wf-template                   # name of the workflow template
@@ -42,17 +47,27 @@ spec:
           artifacts:                                                        # artifacts section
             - name: source                                                  # artifact name
               from: "{{tasks.clone-repo-task.outputs.artifacts.source}}"    # artifact source - the output of the previous task
+          parameters:
+            - name: nexus-registry
+              value: "{{workflow.parameters.nexus-registry}}"
         dependencies: [clone-repo-task]                                     # depends of the previous task success or failure
+      
       - name: update-manifest-task                       # task name
         templateRef:
           name: update-manifest-wf-template              # name of the workflow template
           template: update-manifest                      # name of the manifest of the workflow template
         arguments:
-          parameters:                                    # Pass the GitHub creadentials to the third task
-            - name: github-username
-              value: "{{workflow.parameters.github-username}}"
-            - name: github-token
-              value: "{{workflow.parameters.github-token}}"
+          parameters:                                    # Pass the GitHub credentials to the third task
+            - name: github-username                      # use github username from secret
+              valueFrom:
+                secretKeyRef:
+                  name: github-credentials               # secret name
+                  key: username                          # secret key
+            - name: github-token                         # use github token from secret
+              valueFrom:
+                secretKeyRef:
+                  name: github-credentials               # secret name
+                  key: token                             # secret key
             - name: nexus-registry
               value: "{{workflow.parameters.nexus-registry}}"
             - name: branch
