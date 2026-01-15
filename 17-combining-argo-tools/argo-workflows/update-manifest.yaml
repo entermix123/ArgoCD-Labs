@@ -31,7 +31,7 @@ spec:
                 key: token_name
         source: |
           # sed -i 's|image:.*|image: {{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}}|' nginx-rollout.yaml
-          sed -i 's|image: host.docker.internal:8085/argo-demo/nginx:.*|image: {{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}}|' nginx-rollouts.yml      
+          sed -i 's|image: host.docker.internal:8085/argo-demo/nginx:.*|image: {{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}}|' nginx-rollouts.yaml      
           git config user.name "$GIT_USERNAME"
           git config user.email "your-email@example.com"
           git add .
