@@ -7,8 +7,6 @@ spec:
     - name: update-manifest              # template name
       inputs:
         parameters:                      # set parameters
-          - name: github-username        # github username parameter
-          - name: github-token           # github token parameter
           - name: nexus-registry         # nexus registry parameter
           - name: branch                 # branch parameter
         artifacts:
@@ -18,11 +16,22 @@ spec:
         image: alpine/git                # used image
         workingDir: /tmp/source/17-combining-argo-tools/argo-rollouts           # set manifests dir as working dir
         command: [sh]                    # used command
+        env:                             # environment variables section
+          - name: GITHUB_USERNAME        # github username from secret
+            valueFrom:
+              secretKeyRef:
+                name: github-credentials # secret name
+                key: username            # secret key
+          - name: GITHUB_TOKEN           # github token from secret
+            valueFrom:
+              secretKeyRef:
+                name: github-credentials # secret name
+                key: token               # secret key
         source: |                        # script - update manifest, commit and push changes
           sed -i 's|image:.*|image: {{inputs.parameters.nexus-registry}}/nginx:{{workflow.uid}}|' nginx-rollouts.yml
-          git config user.name "{{inputs.parameters.github-username}}"
-          git config user.email "{{inputs.parameters.github-username}}@users.noreply.github.com"
-          git remote set-url origin https://{{inputs.parameters.github-username}}:{{inputs.parameters.github-token}}@github.com/entermix123/ArgoCD-Labs.git
+          git config user.name "$GITHUB_USERNAME"
+          git config user.email "${GITHUB_USERNAME}@users.noreply.github.com"
+          git remote set-url origin https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/entermix123/ArgoCD-Labs.git
           git add .
           git commit -m "image.tag has been changed to {{workflow.uid}}"
           git push origin {{inputs.parameters.branch}}

@@ -7,8 +7,6 @@ spec:
     - name: clone-repo                   # template name
       inputs:
         parameters:
-          - name: github-username        # github username parameter
-          - name: github-token           # github token parameter
           - name: repo-url               # repository url parameter
       outputs:                           # outputs section
         artifacts:                       # artifact as output
@@ -17,5 +15,18 @@ spec:
       script:                            # script section
         image: alpine/git                # used image
         command: [sh]                    # used command
+        env:                             # environment variables section
+          - name: GITHUB_USERNAME        # github username from secret
+            valueFrom:
+              secretKeyRef:
+                name: github-credentials # secret name
+                key: username            # secret key
+          - name: GITHUB_TOKEN           # github token from secret
+            valueFrom:
+              secretKeyRef:
+                name: github-credentials # secret name
+                key: token               # secret key
         source: |                        # script - clone the repo from url to destination path with credentials
-          git clone https://{{inputs.parameters.github-username}}:{{inputs.parameters.github-token}}@github.com/entermix123/ArgoCD-Labs.git /tmp/source
+          REPO_URL="{{inputs.parameters.repo-url}}"
+          REPO_WITH_AUTH=$(echo $REPO_URL | sed "s|https://|https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@|")
+          git clone $REPO_WITH_AUTH /tmp/source

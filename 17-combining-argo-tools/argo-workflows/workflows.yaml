@@ -18,18 +18,6 @@ spec:
   entrypoint: ci                                      # entrypoint
   templates:
   - name: ci                                          # we use dag type template invoker to execute other workflow templates
-    inputs:
-      parameters:
-        - name: github-username                      # use github username from secret
-          valueFrom:
-            secretKeyRef:
-              name: github-credentials               # secret name
-              key: username                          # secret key
-        - name: github-token                         # use github token from secret
-          valueFrom:
-            secretKeyRef:
-              name: github-credentials               # secret name
-              key: token                             # secret key
     dag:
       tasks:
       - name: clone-repo-task                            # task name
@@ -38,10 +26,6 @@ spec:
           template: clone-repo                           # name of the manifest of the workflow template
         arguments:
           parameters:
-            - name: github-username                      # pass github username from secret
-              value: "{{inputs.parameters.github-username}}"
-            - name: github-token                         # pass github token from secret
-              value: "{{inputs.parameters.github-token}}"
             - name: repo-url                             # pass repository url
               value: "{{workflow.parameters.repo-url}}"
       
@@ -63,11 +47,7 @@ spec:
           name: update-manifest-wf-template              # name of the workflow template
           template: update-manifest                      # name of the manifest of the workflow template
         arguments:
-          parameters:                                    # Pass the GitHub credentials to the third task
-            - name: github-username                      # pass github username from secret
-              value: "{{inputs.parameters.github-username}}"
-            - name: github-token                         # pass github token from secret
-              value: "{{inputs.parameters.github-token}}"
+          parameters:                                    # Pass parameters to the third task
             - name: nexus-registry                       # pass nexus registry url
               value: "{{workflow.parameters.nexus-registry}}"
             - name: branch                               # pass branch name
