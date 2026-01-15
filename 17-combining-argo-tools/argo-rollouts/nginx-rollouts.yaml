@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
       - name: nginx-rollouts
-        image: host.docker.internal:8085/nginx:alpine               # automatically changed version when app change is commited
+        image: host.docker.internal:8085/argo-demo/nginx:alpine               # automatically changed version when app change is commited
         ports:
         - containerPort: 80
 ---
