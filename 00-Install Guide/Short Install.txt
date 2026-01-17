@@ -94,25 +94,6 @@ Argo Workflows
 Create installation 'argo' namespace
 	terminal --> k create ns argo
 
-Create 'argo-events' working namespace
-	terminal --> k create ns argo-events
-
-Manual:
-.......
-Deploy Argo Workflows manifests
-	terminal --> kubectl apply -n argo -f https://github.com/argoproj/argo-workflows/releases/latest/download/install.yaml
-
-Deploy the argo-workflows-ingress.yaml controller
-	terminal --> k apply -f argo-workflows-ingress.yaml
-
-Give workflow-controller access to working 'argo-events' namespace 
-	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:argo-workflow-controller -n argo-events
-
-Patch the argo workflow server to avoid authentication (NOT FOR PRODUCTION !)
-	shell terminal --> kubectl patch deployment argo-server -n argo --type='json' -p='[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value": ["server", "--auth-mode=server"]}]'
-
-Wait a minute and access our Argo Worflows UI on https://argo-workflows.localhost:32074/
-
 
 HELM:
 .....
@@ -138,6 +119,27 @@ Deafult service account permissions
 -----------------------------------
 Create rolebinding for admin service account in working 'argo-events' namespace
 	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
+
+
+Manual:
+.......
+Deploy Argo Workflows manifests
+	terminal --> kubectl apply -n argo -f https://github.com/argoproj/argo-workflows/releases/latest/download/install.yaml
+
+Deploy the argo-workflows-ingress.yaml controller
+	terminal --> k apply -f argo-workflows-ingress.yaml
+
+Give workflow-controller access to working 'argo-events' namespace 
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:argo-workflow-controller -n argo-events
+
+Patch the argo workflow server to avoid authentication (NOT FOR PRODUCTION !)
+	shell terminal --> kubectl patch deployment argo-server -n argo --type='json' -p='[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value": ["server", "--auth-mode=server"]}]'
+
+Wait a minute and access our Argo Worflows UI on https://argo-workflows.localhost:32074/
+
+
+
+
 
 
 
