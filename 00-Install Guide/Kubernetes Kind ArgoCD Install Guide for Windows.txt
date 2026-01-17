@@ -19,8 +19,12 @@ We will go true installing lightweight setup on Windows 11 with:
 	10. Adding the second clusters to ArgoCD
 	11. Install Argo Workflows on main cluster
 	12. Install Argo Workflows CLI on Windows
-	13. Install MinIO artifacts storage with Helm
+
+Example CI/CD pipeline configuration
+	13. Create and configure working namespace
 	14. Install Nexus private image registry
+	15. Install MinIO artifacts storage with Helm
+
 
 
 
@@ -531,7 +535,7 @@ install.yaml - Standard installation method.
 
 		# result: namespace/argo-rollouts created
 
-	Apply argo-rollouts manifest into argo-rollouts namepsace
+	Apply argo-rollouts manifest into argo-rollouts namespace
 		terminal --> kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
 
 		# result:
@@ -1340,24 +1344,10 @@ List resources deployed in 'argo' namespace
 	replicaset.apps/my-workflow-argo-workflows-workflow-controller-58864d5898   1         1         1       16m
 
 
-Create rolebinding for admin role in 'argo' namespace
+Create rolebinding for admin role in 'argo' namespace so we can execute actions with Argo Workflows UI
 	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo:default -n argo
 
 	# result: rolebinding.rbac.authorization.k8s.io/default-admin created
-
-Give workflow-controller permissions in working 'argo-events' namespace
-	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:my-workflow-argo-workflows-workflow-controller -n argo-events
-
-Create rolebinding for admin role in working 'argo-events' namespace
-	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
-
-Configure Access:
------------------
-Create service account in working 'argo-events' namespace
-	terminal --> kubectl create serviceaccount argo-workflows -n argo-events
-
-Create rolebinding for the created service account and give it admin rights
-	terminal --> kubectl create rolebinding argo-workflows-admin --role=cluster-admin --serviceaccount=argo-events:argo-workflows -n argo-events
 
 
 Set ingress controller for permanent access without port forwarding for test purposes
@@ -1471,6 +1461,10 @@ Confirm successfull installation
 	replicaset.apps/workflow-controller-6c84fcfb6   1         1         1       52s
 
 
+Create rolebinding for admin role for installation namespace
+	terminal --> k create rolebinding argo-server-admin --clusterrole=admin --serviceaccount=argo:argo-server -n argo
+	
+
 Set ingress controller for permanent access without port forwarding for test purposes
 
 argo-workflows-ingress.yaml
@@ -1509,20 +1503,6 @@ Patch the argo workflow server to avoid authentication (NOT FOR PRODUCTION !)
 
 	# result: deployment.apps/argo-server patched
 
-Create rolebinding for admin role for installation namespace
-	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo:default -n argo
-
-Create rolebinding for admin role for working namespace
-	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
-
-Configure Access:
------------------
-Create service account in working 'argo-events' namespace
-	terminal --> kubectl create serviceaccount argo-workflows -n argo-events
-
-Create rolebinding for the created service account and give it admin rights
-	terminal --> kubectl create rolebinding argo-workflows-admin --role=cluster-admin --serviceaccount=argo-events:argo-workflows -n argo-events
-
 
 Add host address to Windows host list
 	- Open power Shell as Admin
@@ -1531,14 +1511,12 @@ Add host address to Windows host list
 		- save the file and exit
 
 Add host address to Windows host list on Linux
-	terminal --> sudo vim etc/hosts
+	terminal --> sudo vim /etc/hosts
 	- Add '127.0.0.1 argo-workflows.localhost'
 	- save changes and exit - escape, :wq!, enter
 
 
 We can now access our Argo Worflows UI on https://argo-workflows.localhost:32074/
-
-
 
 
 
@@ -1577,161 +1555,68 @@ We can now access our Argo Worflows UI on https://argo-workflows.localhost:32074
 
 
 
-13. Install MinIO artifacts storage with Helm
-=============================================
+13. Create and configure working namespace
+==========================================
 
-MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+Create working namespace 'argo-events'
+	terminal --> kubectl create ns argo-events
 
-Prerequisites
-	- kubectl CLI tool
-	- Helm CLI tool
-
-MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
-
-INSTALL MINIO WIHT HELM
------------------------
-1. Install MinIO helm repository on our PC
-	terminal --> helm repo add minio https://charts.min.io/
-	terminal --> helm repo update
+	# result: argo-events/workflows created
 
 
-2. Install MinIO chart
-	terminal --> helm install argo-artifacts minio/minio --set resources.requests.memory=512Mi --set replicas=1 --set persistence.enabled=false --set mode=standalone --set rootUser=admin --set rootPassword=password123 --set buckets[0].name=my-bucket --set buckets[0].policy=none --set buckets[0].purge=false -n argo
+IF ARGO WORKFLOWS IN INSTALLED WITH HELM
+----------------------------------------
+
+Scenario 1 - Working with the default user account of the working namespace
+----------
+
+Give workflow-controller permissions to act with pods in the working namespace:
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:my-workflow-argo-workflows-workflow-controller -n argo-events
+
+Give permissions to the working namespace's default service account:
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
 
 
-3. Create credentials secret in working namespace
-	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n <namespace>
 
-	# result: secret/my-minio-cred created
+Scenario 2 - Create separate service account for the working namespace
+----------
 
-4. Set Ingress controller for MinIO to be externally accessed 
+Give workflow-controller permissions to act with pods in the working namespace:
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:my-workflow-argo-workflows-workflow-controller -n argo-events
 
-minio-ingress.yaml
--------------------------------------------------
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: minio-console-ingress
-  namespace: argo
-spec:
-  ingressClassName: nginx
-  rules:
-  - host: minio.localhost
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: argo-artifacts-minio-console
-            port:
-              number: 9001
--------------------------------------------------
+Create service account in working 'argo-events' namespace
+	terminal --> kubectl create serviceaccount argo-workflows -n argo-events
 
-Apply the ingress manifest
-	terminal --> k apply -f minio-ingress.yaml -n argo
-
-	# result: ingress.networking.k8s.io/minio-console-ingress created
-
-	
-Add host address to Windows host list on Windows
-	- Open power Shell as Admin
-		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
-		- add '127.0.0.1 minio.localhost'
-		- save the file and exit
-
-Add host address to Windows host list on Linux
-	terminal --> sudo vim etc/hosts
-	- Add '127.0.0.1 minio.localhost'
-	- save changes and exit - escape, :wq!, enter
+Create rolebinding for the created service account and give it admin rights
+	terminal --> kubectl create rolebinding argo-workflows-admin --clusterrole=admin --serviceaccount=argo-events:argo-workflows -n argo-events
 
 
-Check MinIO pod
-	terminal --> kubectl get pods -n argo -l release=argo-artifacts
 
-Check MinIO services
-	terminal --> kubectl get svc -n argo -l release=argo-artifacts
+IF ARGO WORKFLOWS IN INSTALLED MANUALLY
+---------------------------------------
 
-Check secret
-	terminal --> kubectl get secret my-minio-cred -n workflows
+Scenario 1 - Working with the default service account
+----------
+Give workflow-controller permissions (NOTE: different service account name)
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:argo -n argo-events
 
-Check Ingress
-	terminal --> kubectl get ingress minio-console-ingress -n argo
-
-
-ACCESS MINIO
-------------
-Find the secret for account access
-	terminal --> k get secret -n argo
-
-	# result: 
-	NAME                                   TYPE                 DATA   AGE
-	argo-artifacts-minio                   Opaque               2      15m	# target secret
-
-We can print the secret and see the json paths
-	terminal --> k get secret argo-artifacts-minio -n argo -o yaml
-
-Decode the username (rootUser) with shell
-	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootUser}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
-
-	# result: admin
-
-Decode the password (rootPassword) with shell
-	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootPassword}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
-
-	# result: password123
+Give permissions to working namespace's default service account
+	terminal --> kubectl create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
 
 
-Access the MinIO app on http://minio.localhost:32073/login
-	- admin
-	- password123
+Scenario 2 - Create separate service account
+----------
+Give workflow-controller permissions (NOTE: different service account name)
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:argo -n argo-events
 
-We can create bucket if we haven't with the installation command.
-Create a bucket named 'my-bucket'. We will store our artifacts in this bucket.
+Create service account
+	terminal --> kubectl create serviceaccount argo-workflows -n argo-events
+
+Give it permissions
+	terminal --> kubectl create rolebinding argo-workflows-admin --clusterrole=admin --serviceaccount=argo-events:argo-workflows -n argo-events
 
 
-USE MINIO
----------
-To use artifacts we need to configure MinIO repository to store the artifacts from the working namespace. MinIO repository is configured in minio-artifact-repo-cm.yaml configmap file below.
 
-minio-artifact-repo-cm.yam
--------------------------------------------------
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  # If you want to use this config map by default, name it "artifact-repositories". Otherwise, you can provide a reference to a
-  # different config map in `artifactRepositoryRef.configMap` in the workflow.
-  name: artifact-repository           # this name is not the default name
-  annotations:
-    # v3.0 and after - if you want to use a specific key, put that key into this annotation.
-    workflows.argoproj.io/default-artifact-repository: minio-artifact-repo
-data:
-  minio-artifact-repo: |
-    s3:
-      bucket: my-bucket
-      endpoint: argo-artifacts-minio.argo:9000
-      insecure: true
-      accessKeySecret:
-        name: my-minio-cred
-        key: access-key 
-      secretKeySecret:
-        name: my-minio-cred
-        key: secret-key
--------------------------------------------------
-
-Create the configmap into the working namespace
-	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n <namespace>
-
-	# result: configmap/artifact-repository created
-
-Confirm ConfigMap creation
-	terminal --> kubectl get configmap artifact-repository -n <namespace>
-
-	# result:
-	NAME                  DATA   AGE
-	artifact-repository   1      104m
-
-	
 
 
 
@@ -1796,9 +1681,25 @@ Configure Docker Desktop to communicate with the created repository
 
 
 
-Configure Argo Workflows to push images to Nexus
-------------------------------------------------
+Test Docker connection with Nexus by pushing the image created earlier
+	Login to Nesus true the configured address
+		terminal --> docker login host.docker.internal:8085
+		terminal --> admin
+		terminal --> nexsus_password
 
+	Retag (rename) and push the image we created earlier to the Nexus repository
+		terminal --> docker tag nginx:v1 host.docker.internal:8085/argo-demo/nginx:alpine
+		terminal --> docker push host.docker.internal:8085/argo-demo/nginx:alpine
+
+	The image should be visualized in the Nexus repository
+		- Go to http://localhost:8081/#browse/browse
+		- Then navigate to v2/argo-demo/nginx/tags
+
+
+
+
+Configure Argo Workflows to pull/push images from/to Nexus
+----------------------------------------------------------
 
 We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
 
@@ -1904,8 +1805,195 @@ Wait 2 minutes and delete the daemonset
 	terminal --> kubectl delete -f containerd-config-daemonset.yaml
 
 
-Create a Docker secret in the working namespace to grant argo workflows access to push images to the Nexus registry
-	terminal --> kubectl create secret generic docker-config-secret --from-file="$env:USERPROFILE\.docker\config.json" -n argo-events
+
+Give Argo Workflows access to Nexus
+-----------------------------------
+
+For this task we need to create Docker secret called 'docker-config-secret' in our Argo Workflows working 'argo-events' namespace. We have to mount our docker credentials to this sescret.
+
+We need to create docker-config.json file and set the Nexus credentials so the workflow can pull and push images.
+
+1. Encode the nexus creadentials with shell
+	terminal --> $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("admin:admin123"))
+$auth
+	result: YWRtaW46YWRtaW4xMjM=
+
+2. Create docker-config.json
+-----------------------------------------
+{
+  "auths": {
+    "host.docker.internal:8085": {
+      "auth": "YWRtaW46YWRtaW4xMjM="
+    }
+  }
+}
+-----------------------------------------
+
+From the folder location create Docker secret
+	terminal --> kubectl create secret generic docker-config-secret --from-file=config.json=./docker-config.json -n argo-events
+
+
+
+
+15. Install MinIO artifacts storage with Helm
+=============================================
+
+MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+
+Prerequisites
+	- kubectl CLI tool
+	- Helm CLI tool
+
+MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+
+INSTALL MINIO WIHT HELM
+-----------------------
+1. Install MinIO helm repository on our PC
+	terminal --> helm repo add minio https://charts.min.io/
+	terminal --> helm repo update
+
+
+2. Install MinIO chart
+	terminal --> helm install argo-artifacts minio/minio --set resources.requests.memory=512Mi --set replicas=1 --set persistence.enabled=false --set mode=standalone --set rootUser=admin --set rootPassword=password123 --set buckets[0].name=my-bucket --set buckets[0].policy=none --set buckets[0].purge=false -n argo
+
+
+3. Create credentials secret in working namespace
+	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n <namespace>
+
+	# result: secret/my-minio-cred created
+
+4. Set Ingress controller for MinIO to be externally accessed 
+
+minio-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-console-ingress
+  namespace: argo
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: minio.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-artifacts-minio-console
+            port:
+              number: 9001
+-------------------------------------------------
+
+Apply the ingress manifest
+	terminal --> k apply -f minio-ingress.yaml -n argo
+
+	# result: ingress.networking.k8s.io/minio-console-ingress created
+
+	
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 minio.localhost'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim /etc/hosts
+	- Add '127.0.0.1 minio.localhost'
+	- save changes and exit - escape, :wq!, enter
+
+
+Check MinIO pod
+	terminal --> kubectl get pods -n argo -l release=argo-artifacts
+
+Check MinIO services
+	terminal --> kubectl get svc -n argo -l release=argo-artifacts
+
+Check secret
+	terminal --> kubectl get secret my-minio-cred -n workflows
+
+Check Ingress
+	terminal --> kubectl get ingress minio-console-ingress -n argo
+
+
+ACCESS MINIO
+------------
+Find the secret for account access
+	terminal --> k get secret -n argo
+
+	# result: 
+	NAME                                   TYPE                 DATA   AGE
+	argo-artifacts-minio                   Opaque               2      15m	# target secret
+
+We can print the secret and see the json paths
+	terminal --> k get secret argo-artifacts-minio -n argo -o yaml
+
+Decode the username (rootUser) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootUser}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: admin
+
+Decode the password (rootPassword) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootPassword}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: password123
+
+
+Access the MinIO app on http://minio.localhost:32073/login
+	- admin
+	- password123
+
+We can create bucket if we haven't with the installation command.
+Create a bucket named 'my-bucket'. We will store our artifacts in this bucket.
+
+
+USE MINIO
+---------
+To use artifacts we need to configure MinIO repository to store the artifacts from the working namespace. MinIO repository is configured in minio-artifact-repo-cm.yaml configmap file below.
+
+minio-artifact-repo-cm.yam
+-------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # If you want to use this config map by default, name it "artifact-repositories". Otherwise, you can provide a reference to a
+  # different config map in `artifactRepositoryRef.configMap` in the workflow.
+  name: artifact-repository           # this name is not the default name
+  annotations:
+    # v3.0 and after - if you want to use a specific key, put that key into this annotation.
+    workflows.argoproj.io/default-artifact-repository: minio-artifact-repo
+data:
+  minio-artifact-repo: |
+    s3:
+      bucket: my-bucket
+      endpoint: argo-artifacts-minio.argo:9000
+      insecure: true
+      accessKeySecret:
+        name: my-minio-cred
+        key: access-key 
+      secretKeySecret:
+        name: my-minio-cred
+        key: secret-key
+-------------------------------------------------
+
+Create the configmap into the working namespace
+	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n <namespace>
+
+	# result: configmap/artifact-repository created
+
+Confirm ConfigMap creation
+	terminal --> kubectl get configmap artifact-repository -n <namespace>
+
+	# result:
+	NAME                  DATA   AGE
+	artifact-repository   1      104m
+
+	
+
+
+
+
 
 
 
