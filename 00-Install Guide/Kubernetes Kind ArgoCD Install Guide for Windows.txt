@@ -1350,39 +1350,6 @@ Create rolebinding for admin role in 'argo' namespace so we can execute actions 
 	# result: rolebinding.rbac.authorization.k8s.io/default-admin created
 
 
-Set ingress controller for permanent access without port forwarding for test purposes
-
-argo-workflows-ingress.yaml
--------------------------------------------------
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: argo-workflows
-  namespace: argo
-  annotations:
-    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
-    nginx.ingress.kubernetes.io/ssl-redirect: "false"
-spec:
-  ingressClassName: nginx
-  rules:
-  - host: argo-workflows.localhost
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: argo-server
-            port:
-              number: 2746
--------------------------------------------------
-
-Deploy the argo-workflows-ingress.yaml controller
-	terminal --> k apply -f argo-workflows-ingress.yaml -n argo
-
-	# result: ingress.networking.k8s.io/argo-workflows created
-
-
 Add host address to Windows host list
 	- Open PowerShell as Admin
 		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
@@ -1396,6 +1363,7 @@ Add host address to Linux host list
 
 
 We can now access our Argo Workflows UI on https://argo-workflows.localhost:32074/
+
 
 
 
@@ -1801,6 +1769,9 @@ Apply the deamonset
 
 	# result: daemonset.apps/containerd-registry-config created
 
+Test nodes communication
+	terminal --> k get nodes
+
 Wait 2 minutes and delete the daemonset
 	terminal --> kubectl delete -f containerd-config-daemonset.yaml
 
@@ -1832,6 +1803,8 @@ $auth
 From the folder location create Docker secret
 	terminal --> kubectl create secret generic docker-config-secret --from-file=config.json=./docker-config.json -n argo-events
 
+	# result: secret/docker-config-secret created
+
 
 
 
@@ -1858,9 +1831,10 @@ INSTALL MINIO WIHT HELM
 
 
 3. Create credentials secret in working namespace
-	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n <namespace>
+	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n argo-events
 
 	# result: secret/my-minio-cred created
+
 
 4. Set Ingress controller for MinIO to be externally accessed 
 
@@ -1978,7 +1952,7 @@ data:
 -------------------------------------------------
 
 Create the configmap into the working namespace
-	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n <namespace>
+	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n argo-events
 
 	# result: configmap/artifact-repository created
 
@@ -1989,9 +1963,43 @@ Confirm ConfigMap creation
 	NAME                  DATA   AGE
 	artifact-repository   1      104m
 
-	
 
 
+
+
+GENERATE GITHUB CREDENTIALS
+---------------------------
+
+We need to provide GitHub credentials to our workflow to access the application repository and manage it - clone it, make changes to the manifests etc.
+
+Login to GitHub - https://github.com/
+Go to https://github.com/settings/tokens
+	- Generate New Token (classic)
+		- Name: argo-workflows
+		- Scope
+			- repo - Full control of private repositories 
+			- workflow - Update GitHub Action workflows (Optional)
+		- Generate Token
+	- Copy the value (save it safe temporary)
+
+Create local environment variables with GitHub Username and Token
+	terminal --> $GITHUB_USERNAME = "git_username"			# set your username
+	terminal --> $GitHubTokenName = "argo-workflows"		# set the token name
+	terminal --> $GITHUB_TOKEN = "generated_token"			# set the token
+
+Test the creation of the environment cariables
+	terminal --> echo $GITHUB_USERNAME
+	terminal --> echo $GitHubTokenName
+	terminal --> echo $GITHUB_TOKEN
+
+
+
+We will use the environment variables to create secrets objects in our Kubernetes cluster and set them in the workflow.
+
+CREATE SECRETS FOR GITHUB CREDENTAILS
+-------------------------------------
+Create secret in our working namespace to use GitHub credentials safetly
+	terminal --> kubectl create secret generic github-credentials --from-literal=username=$GITHUB_USERNAME --from-literal=token_name=$GitHubTokenName --from-literal=token=$GITHUB_TOKEN -n argo-events
 
 
 
