@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
       - name: nginx-rollouts
-        image: host.docker.internal:8085/argo-demo/nginx:50428a1f-02eb-4a4e-81d5-d2ce83b71263
+        image: host.docker.internal:8085/argo-demo/nginx:alpine
         ports:
         - containerPort: 80
 ---
