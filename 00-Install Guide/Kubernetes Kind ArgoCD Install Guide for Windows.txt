@@ -20,12 +20,14 @@ We will go true installing lightweight setup on Windows 11 with:
 	11. Install Argo Workflows on main cluster
 	12. Install Argo Workflows CLI on Windows
 
-Example CI/CD pipeline configuration
+Example CI/CD pipeline configuration with GitHub
 	13. Create and configure working namespace
 	14. Install Nexus private image registry
 	15. Install MinIO artifacts storage with Helm
 
-
+Example CI/CD pipeline configuration with GitLab
+	16. Install GitLab and set local repositories
+	17. 
 
 
 
@@ -1878,30 +1880,8 @@ Add host address to Windows host list on Linux
 	- save changes and exit - escape, :wq!, enter
 
 
-Check MinIO pod
-	terminal --> kubectl get pods -n argo -l release=argo-artifacts
-
-Check MinIO services
-	terminal --> kubectl get svc -n argo -l release=argo-artifacts
-
-Check secret
-	terminal --> kubectl get secret my-minio-cred -n workflows
-
-Check Ingress
-	terminal --> kubectl get ingress minio-console-ingress -n argo
-
-
 ACCESS MINIO
 ------------
-Find the secret for account access
-	terminal --> k get secret -n argo
-
-	# result: 
-	NAME                                   TYPE                 DATA   AGE
-	argo-artifacts-minio                   Opaque               2      15m	# target secret
-
-We can print the secret and see the json paths
-	terminal --> k get secret argo-artifacts-minio -n argo -o yaml
 
 Decode the username (rootUser) with shell
 	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootUser}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
@@ -1993,13 +1973,127 @@ Test the creation of the environment cariables
 	terminal --> echo $GITHUB_TOKEN
 
 
+Create secretfor workflow task in the next step in the same terminal session else the envs will be deleted and the access will be denied.
+
 
 We will use the environment variables to create secrets objects in our Kubernetes cluster and set them in the workflow.
 
-CREATE SECRETS FOR GITHUB CREDENTAILS
--------------------------------------
+CREATE SECRETS FOR GITHUB CREDENTAILS IN THE SAME SHELL SESSION
+---------------------------------------------------------------
+
 Create secret in our working namespace to use GitHub credentials safetly
 	terminal --> kubectl create secret generic github-credentials --from-literal=username=$GITHUB_USERNAME --from-literal=token_name=$GitHubTokenName --from-literal=token=$GITHUB_TOKEN -n argo-events
+	
+	# result: secret/github-credentials created
+
+
+
+
+
+16. Install GitLab and set local repositories
+=============================================
+
+
+Install local GitLab repository with Docker 
+-------------------------------------------
+
+Start Docker container with GitLab
+	terminal --> docker run -d --hostname gitlab.local --name gitlab -p 443:443 -p 80:80 -p 22:22 --restart always -v ~/gitlab/config:/etc/gitlab -v ~/gitlab/logs:/var/log/gitlab -v ~/gitlab/data:/var/opt/gitlab gitlab/gitlab-ce:latest
+
+
+Set new password
+	terminal --> docker exec -it gitlab gitlab-rake "gitlab:password:reset[root]"
+	
+	Wait for the console to ask for password
+		terminal --> example_passowrd
+		terminal --> confirm password
+
+	# result: Password successfully updated for user with username root.
+
+	
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 gitlab.local'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim /etc/hosts
+	- Add '127.0.0.1 gitlab.local'
+	- save changes and exit - escape, :wq!, enter
+
+
+
+Login to GitLab on http://gitlab.localhost/users/sign_in
+	Username: root
+	Password: your_password
+
+Create a blank project
+	- name: argo-config
+	- Project URL: http://gitlab.localhost/root/argo-config
+	- Create project
+
+Creaet another project for our app
+	- name: my-app
+	- Project URL: http://gitlab.localhost/root/my-app
+	- Create project
+
+
+
+Create Locally repositories and connect them with GitLab
+--------------------------------------------------------
+
+Create argo-demo folder and clone the 2 folders from the repo:
+
+1. my-app
+---------
+1.1. Clone the empty repo we created
+	terminal --> git clone http://gitlab.local/root/my-app.git
+
+1.2. Set the files in the repo folder
+	Navigate to folder
+		terminal --> cd my-app
+
+	Set the files
+	|--my-app
+	   |-- Dockerfile
+	   |-- index.html
+
+1.3. Push the fils
+	terminal --> git add .
+	terimnal --> git commit -m 'init repo'
+	terminal --> git push
+	terminal --> Username: root
+	terminal --> Password: gitlab_password
+
+
+
+2. argo-config
+--------------
+2.1. Clone the empty repo we created
+	terminal --> git clone http://gitlab.local/root/argo-config.git
+
+2.2. Set the files in the repo folder
+	Navigate to folder
+		terminal --> cd argo-config
+
+	Set the files
+	|--argo-cd
+	|  |-- argo-app.yaml
+	|
+	|--argo-events
+	|  |-- event-source.yaml
+	|  |-- sensor.yaml
+	|
+	|--argo-rollouts
+	   |-- nginx-ingress.yaml
+	   |-- nginx-rollouts.yaml
+
+2.3. Push the fils
+	terminal --> git add .
+	terimnal --> git commit -m 'init repo'
+	terminal --> git push
+
 
 
 
