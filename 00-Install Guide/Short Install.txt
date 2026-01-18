@@ -106,13 +106,8 @@ Create rolebinding for cluster admin role in 'argo' namespace
 Deploy the argo-workflows-ingress.yaml controller
 	terminal --> k apply -f argo-workflows-ingress.yaml
 
-Give workflow-controller access to working 'argo-events' namespace 
-	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:my-workflow-argo-workflows-workflow-controller -n argo-events
-
-Create cluster binding for service account for UI executions
-	terminal --> kubectl create clusterrolebinding argo-server-admin --clusterrole=admin --serviceaccount=argo:my-workflow-argo-workflows-server
-
-Wait a minute and access our Argo Worflows UI on https://argo-workflows.localhost:32074/
+Create rolebinding for admin role in 'argo' namespace so we can execute actions with Argo Workflows UI
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo:default -n argo
 
 
 Deafult service account permissions
@@ -129,13 +124,75 @@ Deploy Argo Workflows manifests
 Deploy the argo-workflows-ingress.yaml controller
 	terminal --> k apply -f argo-workflows-ingress.yaml
 
-Give workflow-controller access to working 'argo-events' namespace 
-	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:argo-workflow-controller -n argo-events
-
 Patch the argo workflow server to avoid authentication (NOT FOR PRODUCTION !)
 	shell terminal --> kubectl patch deployment argo-server -n argo --type='json' -p='[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value": ["server", "--auth-mode=server"]}]'
 
 Wait a minute and access our Argo Worflows UI on https://argo-workflows.localhost:32074/
+
+
+
+
+
+
+13. Create and configure working namespace
+==========================================
+
+Create working namespace 'argo-events'
+	terminal --> kubectl create ns argo-events
+
+	# result: argo-events/workflows created
+
+
+IF ARGO WORKFLOWS IN INSTALLED WITH HELM
+----------------------------------------
+
+Scenario 1 - Working with the default user account of the working namespace
+----------
+
+Give workflow-controller permissions to act with pods in the working namespace:
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:my-workflow-argo-workflows-workflow-controller -n argo-events
+
+Give permissions to the working namespace's default service account:
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
+
+
+
+Scenario 2 - Create separate service account for the working namespace
+----------
+
+Give workflow-controller permissions to act with pods in the working namespace:
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:my-workflow-argo-workflows-workflow-controller -n argo-events
+
+Create service account in working 'argo-events' namespace
+	terminal --> kubectl create serviceaccount argo-workflows -n argo-events
+
+Create rolebinding for the created service account and give it admin rights
+	terminal --> kubectl create rolebinding argo-workflows-admin --clusterrole=admin --serviceaccount=argo-events:argo-workflows -n argo-events
+
+
+
+IF ARGO WORKFLOWS IN INSTALLED MANUALLY
+---------------------------------------
+
+Scenario 1 - Working with the default service account
+----------
+Give workflow-controller permissions (NOTE: different service account name)
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:argo -n argo-events
+
+Give permissions to working namespace's default service account
+	terminal --> kubectl create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
+
+
+Scenario 2 - Create separate service account
+----------
+Give workflow-controller permissions (NOTE: different service account name)
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:argo -n argo-events
+
+Create service account
+	terminal --> kubectl create serviceaccount argo-workflows -n argo-events
+
+Give it permissions
+	terminal --> kubectl create rolebinding argo-workflows-admin --clusterrole=admin --serviceaccount=argo-events:argo-workflows -n argo-events
 
 
 
@@ -210,6 +267,7 @@ Check the default namespace
 	*         kind-kind       kind-kind       kind-kind       argo-events	# current namespace
 
 
+
 GENERATE GITHUB CREDENTIALS
 ---------------------------
 
@@ -226,26 +284,248 @@ Go to https://github.com/settings/tokens
 	- Copy the value (save it safe temporary)
 
 Create local environment variables with GitHub Username and Token
-	terminal --> $GITHUB_USERNAME = "argo-workflows"
-	terminal --> $GITHUB_TOKEN = "generated_token"
+	terminal --> $GITHUB_USERNAME = "git_username"			# set your username
+	terminal --> $GitHubTokenName = "argo-workflows"		# set the token name
+	terminal --> $GITHUB_TOKEN = "generated_token"			# set the token
 
+Test the creation of the environment cariables
+	terminal --> echo $GITHUB_USERNAME
+	terminal --> echo $GitHubTokenName
+	terminal --> echo $GITHUB_TOKEN
+
+
+Create secretfor workflow task in the next step in the same terminal session else the envs will be deleted and the access will be denied.
+
+
+We will use the environment variables to create secrets objects in our Kubernetes cluster and set them in the workflow.
+
+CREATE SECRETS FOR GITHUB CREDENTAILS IN THE SAME SHELL SESSION
+---------------------------------------------------------------
 
 Create secret in our working namespace to use GitHub credentials safetly
-	terminal --> kubectl create secret generic github-credentials --from-literal=username=$GITHUB_USERNAME --from-literal=token=$GITHUB_TOKEN -n argo-events
+	terminal --> kubectl create secret generic github-credentials --from-literal=username=$GITHUB_USERNAME --from-literal=token_name=$GitHubTokenName --from-literal=token=$GITHUB_TOKEN -n argo-events
+	
+	# result: secret/github-credentials created
 
 
-Create Docker secret
-	terminal --> kubectl create secret generic docker-config-secret --from-file="$env:USERPROFILE\.docker\config.json" -n argo
+
+
+14. Install Nexus private image registry
+========================================
+
+1. Download and install Java from: https://www.oracle.com/java/technologies/downloads/#jdk25-windows
+
+	Confirm java installation
+		terminal --> java -version
+
+2 Download Nexus Repository OSS (Open Source) for Windows - https://www.sonatype.com/products/nexus-community-edition-download
+
+3. Install Nexus
+	- unarchive on the PC and navigate to the folder
+	- Open shell as administrator and run
+		terminal --> .\install-nexus-service.bat
+
+4. Start Nexus service
+	terminal --> net start SonatypeNexusRepository
+
+	Check if port 8081 is listening
+		terminal --> netstat -ano | findstr :8081
+
+5. Login to Nexus on http://localhost:8081/#login
+
+	Find the initial generated credentials in the installed directory 'sonatype-work\nexus3\admin.password' or with shell
+		terminal --> type E:\Installed\nexus-3.88.0-08-win-x86_64\sonatype-work\nexus3\admin.password
+
+	Login to the app and finish the installtion. Relogin.
+		Username: admin
+		Password: admin123		(default)
+
+
+Create Nexus repository - example usage
+---------------------------------------
+- Open Nexus - http://localhost:8081
+- Go to Settings/Repositories/Create Repository/docker(hosted)
+	- Name: argo-demo
+	- Other Connectors
+		- HTTP: 8085
+	- Docker Registry API Support
+		Select Checkbox "Allow clients to use the V1 API to interact with this repository"
+	- Create Repository
+
+- Go to Settings/Security/Realms
+	- Set Docker Bearer Token Realm to Active
+	- Save
+
+ 
+
+Configure Docker Desktop to communicate with the created repository
+	- Open Docker/Settings/Docker Engine
+	- Add
+	-------------------------------------------------
+	{
+	  "insecure-registries": ["localhost:8085"]
+	}
+	-------------------------------------------------
+	- Apply and Restart
+
+
+
+Test Docker connection with Nexus by pushing the image created earlier
+	Login to Nesus true the configured address
+		terminal --> docker login host.docker.internal:8085
+		terminal --> admin
+		terminal --> nexsus_password
+
+	Retag (rename) and push the image we created earlier to the Nexus repository
+		terminal --> docker tag nginx:v1 host.docker.internal:8085/argo-demo/nginx:alpine
+		terminal --> docker push host.docker.internal:8085/argo-demo/nginx:alpine
+
+	The image should be visualized in the Nexus repository
+		- Go to http://localhost:8081/#browse/browse
+		- Then navigate to v2/argo-demo/nginx/tags
+
+
+
+
+Configure Argo Workflows to pull/push images from/to Nexus
+----------------------------------------------------------
+
+We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
+
+Configure Argo Workflows to communicate with Nexus repository
+	- Open Docker/Settings/Docker Engine
+	- Add
+	-------------------------------------------------
+	{
+	  "insecure-registries": ["localhost:8085", "host.docker.internal:8085"]
+	}
+	-------------------------------------------------
+	- Apply and Restart
+
+
+
+Configure Argo Workflows to pull images from Nexus
+--------------------------------------------------
+
+
+Create containerd daemonset configuration
+
+containerd-config-daemonset.yaml
+-------------------------------------------------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: containerd-registry-config
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: containerd-registry-config
+  template:
+    metadata:
+      labels:
+        name: containerd-registry-config
+    spec:
+      hostPID: true
+      hostNetwork: true
+      initContainers:
+      - name: configure-containerd
+        image: alpine:latest
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          
+          # Check if configuration already exists
+          if grep -q "host.docker.internal:8085" /host/etc/containerd/config.toml 2>/dev/null; then
+            echo "Registry configuration already exists, skipping..."
+            exit 0
+          fi
+          
+          # Append registry configuration
+          cat >> /host/etc/containerd/config.toml << 'EOF'
+
+          [plugins."io.containerd.grpc.v1.cri".registry.mirrors."host.docker.internal:8085"]
+            endpoint = ["http://host.docker.internal:8085"]
+          [plugins."io.containerd.grpc.v1.cri".registry.configs."host.docker.internal:8085".tls]
+            insecure_skip_verify = true
+          EOF
+          
+          echo "Configuration added successfully"
+          
+          # Find and restart containerd process
+          CONTAINERD_PID=$(nsenter -t 1 -m -u -i -n -p pgrep containerd | head -n 1)
+          if [ -n "$CONTAINERD_PID" ]; then
+            echo "Sending SIGHUP to containerd (PID: $CONTAINERD_PID)"
+            nsenter -t 1 -m -u -i -n -p kill -HUP $CONTAINERD_PID
+            sleep 2
+            echo "Containerd reloaded"
+          else
+            echo "Warning: Could not find containerd process"
+          fi
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: containerd-config
+          mountPath: /host/etc/containerd
+      containers:
+      - name: pause
+        image: registry.k8s.io/pause:3.9
+        resources:
+          requests:
+            cpu: 1m
+            memory: 4Mi
+      volumes:
+      - name: containerd-config
+        hostPath:
+          path: /etc/containerd
+          type: Directory
+      tolerations:
+      - operator: Exists
+-------------------------------------------------
+
+Apply the deamonset
+	terminal --> kubectl apply -f containerd-config-daemonset.yaml
+
+	# result: daemonset.apps/containerd-registry-config created
+
+Test nodes communication
+	terminal --> k get nodes
+
+Wait 2 minutes and delete the daemonset
+	terminal --> kubectl delete -f containerd-config-daemonset.yaml
+
+
+
+Give Argo Workflows access to Nexus
+-----------------------------------
+
+For this task we need to create Docker secret called 'docker-config-secret' in our Argo Workflows working 'argo-events' namespace. We have to mount our docker credentials to this sescret.
+
+We need to create docker-config.json file and set the Nexus credentials so the workflow can pull and push images.
+
+1. Encode the nexus creadentials with shell
+	terminal --> $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("admin:admin123"))
+$auth
+	result: YWRtaW46YWRtaW4xMjM=
+
+2. Create docker-config.json
+-----------------------------------------
+{
+  "auths": {
+    "host.docker.internal:8085": {
+      "auth": "YWRtaW46YWRtaW4xMjM="
+    }
+  }
+}
+-----------------------------------------
+
+From the folder location create Docker secret
+	terminal --> kubectl create secret generic docker-config-secret --from-file=config.json=./docker-config.json -n argo-events
 
 	# result: secret/docker-config-secret created
 
-
-
-
-Nexsus
-------
-
-Login to Nexus on http://localhost:8081/#login
 
 
 
