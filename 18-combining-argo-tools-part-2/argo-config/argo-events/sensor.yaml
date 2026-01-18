@@ -1,0 +1,154 @@
+# Create a service account with RBAC settings to allow the sensor to trigger workflows, and allow workflows to function.
+# kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/sensor-rbac.yaml
+# kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/workflow-rbac.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: ci
+  namespace: argo-events
+spec:
+  template:
+    serviceAccountName: operate-workflow-sa
+  dependencies:
+    - name: ci
+      eventSourceName: ci
+      eventName: argo-demo
+  triggers:
+    - template:
+        name: ci
+        argoWorkflow:
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                generateName: argo-demo-
+              spec:
+                arguments:
+                  parameters:
+                    - name: app-repo-url
+                      value: http://172.17.0.1/root/my-app.git
+                    - name: argo-config-repo-url
+                      value: http://172.17.0.1/root/argo-config.git
+                    - name: app-clone-dest
+                      value: /tmp/app
+                    - name: argo-config-clone-dest
+                      value: /tmp/argo-config
+                    - name: argo-config-branch
+                      value: main
+                    - name: nexus-registry
+                      value: host.docker.internal:8085
+                artifactRepositoryRef:
+                  configMap: artifact-repository                 # artifact repository configmap - MinIO
+                entrypoint: ci
+                templates:
+                - name: ci
+                  dag:
+                    tasks:
+                    - name: clone-repo-task                     # clone repo task
+                      template: clone-repo                      # clone repo template
+                    - name: build-push-task                     # build and push task
+                      template: build-and-push                  # build and push template
+                      arguments:                                # push artifact to with the image tag
+                        artifacts:
+                          - name: app-repo                      # artifact name
+                            from: "{{tasks.clone-repo-task.outputs.artifacts.app-repo}}"     # artifact path
+                      dependencies: [clone-repo-task]           # dependency on clone repo task
+                    - name: update-manifest-task                # update manifest task
+                      template: update-manifest                 # update manifest template
+                      arguments:                                # use artifacts from build-push task
+                        artifacts:
+                          - name: argo-config-repo              # artifact name
+                            from: "{{tasks.clone-repo-task.outputs.artifacts.argo-config-repo}}"     # artifact path
+                      dependencies: [clone-repo-task, build-push-task]   # dependency on clone repo task and build-push task
+                - name: clone-repo                          # clone repo template
+                  outputs:                                  # output artifacts
+                    artifacts:
+                    - name: app-repo                        # artifact name
+                      path: "{{workflow.parameters.app-clone-dest}}"              # artifact path
+                    - name: argo-config-repo                                      # artifact name
+                      path: "{{workflow.parameters.argo-config-clone-dest}}"      # artifact path
+                  script:
+                    image: alpine/git
+                    command: [sh]
+                    env:
+                      - name: APP_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: app-repo-credentials
+                            key: token
+                      - name: CONFIG_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: config-repo-credentials
+                            key: token
+                    source: |
+                      git clone http://root:${APP_TOKEN}@172.17.0.1/root/my-app.git {{workflow.parameters.app-clone-dest}}
+                      git clone http://root:${CONFIG_TOKEN}@172.17.0.1/root/argo-config.git {{workflow.parameters.argo-config-clone-dest}}
+                - name: build-and-push                      # build and push template
+                  inputs:                                   # input artifacts
+                    artifacts:
+                    - name: app-repo                                   # input artifact name
+                      path: "{{workflow.parameters.app-clone-dest}}"   # input artifact path
+                  volumes:
+                    - name: docker-config-secret            # use volume to read docker secret 
+                      secret:
+                        secretName: docker-config-secret    # use docker config secret to access private image registry
+                  container:
+                    readinessProbe:
+                      exec:
+                        command: [ sh, -c, "buildctl debug workers" ]
+                    image: moby/buildkit:v0.9.3-rootless
+                    volumeMounts:
+                      - name: docker-config-secret
+                        mountPath: /.docker
+                    workingDir: "{{workflow.parameters.app-clone-dest}}"
+                    env:
+                      - name: BUILDKITD_FLAGS
+                        value: --oci-worker-no-process-sandbox
+                      - name: DOCKER_CONFIG
+                        value: /.docker
+                    command:
+                      - buildctl-daemonless.sh
+                    args:
+                      - build
+                      - --frontend
+                      - dockerfile.v0
+                      - --local
+                      - context=.
+                      - --local
+                      - dockerfile=.
+                      - --output
+                      - type=image,name={{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}},push=true,registry.insecure=true
+                    securityContext:
+                      privileged: true
+                - name: update-manifest
+                  inputs:
+                    artifacts:
+                      - name: argo-config-repo
+                        path: "{{workflow.parameters.argo-config-clone-dest}}"
+                  script:
+                    image: alpine/git
+                    workingDir: "{{workflow.parameters.argo-config-clone-dest}}/argo-rollouts"
+                    command: [sh]
+                    env:                                    # read credentials from secret
+                      - name: GITLAB_USERNAME
+                        valueFrom:
+                          secretKeyRef:
+                            name: config-repo-credentials
+                            key: username
+                      - name: GITLAB_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: config-repo-credentials
+                            key: token
+                    source: |
+                      sed -i 's|image: host.docker.internal:8085/argo-demo/nginx:.*|image: {{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}}|' nginx-rollouts.yaml      
+                      git config user.name "$GITLAB_USERNAME"
+                      git config user.email "your-email@example.com"
+                      git add .
+                      git commit -m "image.tag has been changed to {{workflow.uid}}"
+
+                      git remote set-url origin http://${GITLAB_USERNAME}:${GITLAB_TOKEN}@172.17.0.1/root/argo-config.git
+                      git push origin {{workflow.parameters.argo-config-branch}}
