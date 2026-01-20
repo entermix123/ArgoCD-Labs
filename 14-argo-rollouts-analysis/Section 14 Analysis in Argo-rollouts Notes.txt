@@ -1,0 +1,1610 @@
+Video link - https://www.youtube.com/watch?v=qbHv3riNN0g&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=15
+
+Video Agenda:
+
+00:00 Analysis Overview
+00:03:15 Using Pre-promotion Analysis In Blue-green Deployment
+00:30:30 Using Post-promotion Analysis In Blue-green Deployment
+00:38:28 Analysis Template Arguments
+00:45:06 ClusterAnalysisTemplates
+00:46:30 Using Analysis In Canary Deployment
+
+Video Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+Prerequisites
+=============
+
+We should have atleast one running cluster:
+-------------------------------------------
+
+List clusters
+	terminal --> kubectl config get-clusters
+
+	# result: 
+	kind-kind
+	cluster2
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       			# current cluster
+
+
+
+We should have installed Argo Rollouts 
+--------------------------------------
+Section 11. Install Argo Rollouts on main cluster from the installtion guide below
+
+
+We can find prerequisites installation instructions here - https://github.com/entermix123/ArgoCD-Labs/blob/main/00-Install%20Guide/Kubernetes%20Kind%20ArgoCD%20Install%20Guide%20for%20Windows.txt
+
+
+
+
+
+
+Analysis Overview
+=================
+
+3 important CRDs
+	- AnalysisTemplate - tempate spec which defines how to perform an analasysis such as the analisys we shold perform, the frequesncy and the values which are considered successfull or failed.
+		- Example: We measure the success rate of the app. If the result is 80%> the analysis will be successful.
+
+	- ClusterAnalysisTemplate - Like AnalysisTemplate but not limited to its namespace. It can be used by any rollout trueout the cluster.
+
+	- AnalysisRun - Is an instantiation of a AnalysisTemplate. AnalysisRuns are like jobs. Completed AnalysisRuns are considered successful or failed. The result of the AnalysisRun affect if the rollout update will continue abort or pause. 
+
+
+
+
+
+
+Using Pre-promotion Analysis In Blue-green Deployment
+=====================================================
+
+AnalysisRun can be launched before switch of the traffic to the new app version using pre-promotion. It can be used to block the service selector switch until the AnalysisRun finish successfully. The success or the failure of the AnalysisRun decide if the rollout switches traffic or abort the rollout.
+
+
+We will use image blue-green created in section '12 - Argo-rollouts blue-green deployment strategy' with two application versions in it.
+
+Load the image in the cluster
+	terminal --> kind load docker-image blue-green --name kind
+
+
+Create 'blue-green' namespace 
+	terminal --> k create ns blue-green
+
+	# result: namespace/blue-green created
+
+Set 'blue-green' namespace as default namepsace
+	terminal --> k config set-context --current --namespace=blue-green
+
+	# result: Context "kind-kind" modified.
+
+Confirm default namespace modification
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       blue-green	# current cluster and namepsace
+
+
+
+We have 2 other files tha twe will create another image called 'analysis' with - app-success-rate.sh and Dokerfile
+
+app-success-rate.sh
+-----------------------------------------------
+### WE are using curl command to get success_rate of active and preview services in blue-green strategy
+### $service_url variable will be initialized in kubernetes job as an container environment variable
+### The Value of $service_url variable will be one of the active or preview services names
+#!/bin/bash
+success=0
+failure=0
+##################
+for i in {1..5}
+do
+        response=$(curl -s -o /dev/null -w "%{http_code}" $service_url)
+        if [ "$response" -eq 200 ]
+        then
+		((success++))
+         else
+                ((failure++))
+         fi
+         sleep 5s
+done
+##################
+echo "Success rate: $success/5" 
+##################
+if [ "$success" -ge 3 ]
+then
+        exit 0
+else
+        exit 1
+fi
+-----------------------------------------------
+
+This shell script will run in loop 5 times in 5 seconds intervals. In this loop it will try to connect to the active service or previews service. If 3 of 5 attmempts return response code 200 (success) the shell script will return success code 'exit 0' else fail code 'exit 1'.
+
+
+Dockerfile
+-----------------------------------------------
+FROM alpine:latest
+RUN apk add --no-cache bash curl dos2unix
+WORKDIR /devops-hobbies
+COPY app-success-rate.sh .
+RUN dos2unix app-success-rate.sh && chmod +x app-success-rate.sh
+-----------------------------------------------
+
+
+Create image named analysis
+	terminal --> docker build -t analysis .
+
+Confirm image creation
+	terminal --> docker image list 
+
+Load the image into the cluster
+	terminal --> kind load docker-image analysis --name kind
+
+
+
+We will use pre-promotion-analysis.yaml, rollout-with-analysis.yaml and ingress.yaml files from the Lab repo.
+	- pre-promotion-analysis.yaml - Rollout Analysis
+	- rollout-with-analysis.yaml - rollout with blue-green strategy (active and preview services)
+	- ingress.yaml - service to expose application host address
+
+
+
+
+ANALYSIS TEMPLATE
+-----------------
+
+We have multiple providers in Argo Rollouts Analysis to define metrics for analysing purposes. On of the providers is Kubernetes Job Objects. If the job is successful the rollout will contunie else aborted and the app will run with the previous revision.
+
+This is the official Argo Rollouts analysis providers page - https://argo-rollouts.readthedocs.io/en/stable/features/analysis/
+
+In this exercise we will use job provider - https://argo-rollouts.readthedocs.io/en/stable/analysis/job/
+
+Below we have ready to use AnalysisTemplate of a job - pre-promotion-analysis.yaml
+
+pre-promotion-analysis.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: success-rate-pre                     # pre-promotion-analysis name
+spec:
+  args:
+  - name: service-port
+    value: "5000"
+  - name: service-namespace
+  metrics:
+  - name: success-rate-pre
+    provider:
+      job:
+        metadata:
+          labels:
+            analysis: pre-promotion          # labels defined here will be copied to the Job object
+        spec:
+          backoffLimit: 0
+          template:
+            spec:
+              containers:
+              - name: success-rate-pre
+                image: analysis 
+                # this is the same image that we built to get success_rate. 
+                # you can find related files (Dockerfile, app-success-rate.sh) in the current directory
+                imagePullPolicy: Never
+                env:
+                - name: service_url
+                  value: "http://rollout-bluegreen-preview.{{args.service-namespace}}.svc.cluster.local:{{args.service-port}}"
+                command: ["/bin/bash", "-c"]
+                args:
+                - ./app-success-rate.sh
+              restartPolicy: Never
+-----------------------------------------------
+
+Deploy the analysis
+	terminal --> k apply -f pre-promotion-analysis.yaml
+
+	# result: analysistemplate.argoproj.io/success-rate-pre created
+
+Confirm analysis creation
+	terminal --> kubectl get analysistemplate
+
+	# result:
+	NAME               AGE
+	success-rate-pre   1m
+
+Get detailed information
+	terminal --> k describe analysistemplate success-rate-pre
+
+View the full YAML
+	terminal --> k get analysistemplate success-rate-pre -o yaml
+
+
+
+
+ROLLOUT WITH ANALYSIS
+---------------------
+
+rollout-with-analysis.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: blue-green-deployment
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: blue-green-deployment
+  template:
+    metadata:
+      labels:
+        app: blue-green-deployment
+    spec:
+      containers:
+      - name: blue-green                     # app name
+        image: blue-green                    # app image
+        imagePullPolicy: Never               # disable image pulling because we have it locally
+        env:
+        - name: html_name                    # environment name
+          value: "app-v1.html"               # environment value
+        ports:
+        - containerPort: 5000
+  strategy:
+    blueGreen:                                  # strategy
+      activeService: rollout-bluegreen-active
+      previewService: rollout-bluegreen-preview
+      autoPromotionEnabled: true                # Autopromotion enabled
+      prePromotionAnalysis:                     # Pre-Promotion Analysis
+        templates:
+        - templateName: success-rate-pre        # used analysis template name
+        args:
+        - name: service-namespace
+          value: blue-green  
+      # postPromotionAnalysis:                  # Post-Promotion Analysis
+      #  templates:
+      #  - templateName: success-rate-post
+      #  args:
+      #  - name: service-namespace
+      #    value: blue-green
+      # abortScaleDownDelaySeconds: 10
+      # scaleDownDelaySeconds: 60
+      # previewReplicaCount: 2
+      # autoPromotionSeconds: 70
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-active                # active service
+spec:
+  selector:
+    app: blue-green-deployment
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-preview              # preview service
+spec:
+  selector:
+    app: blue-green-deployment
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+-----------------------------------------------
+
+
+
+We use ingress ontroller to expose application host address and access it.
+
+ingress.yaml
+-----------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: blue-green-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: blue-green.demo                             # app host address
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rollout-bluegreen-active           # target service name
+            port:
+              number: 5000
+-----------------------------------------------
+
+
+Add host address to Windows host list
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 blue-green.demo'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim etc/hosts
+	- Add '127.0.0.1 blue-green.demo'
+	- save changes and exit - escape, :wq!, enter
+
+
+
+Deploy the rollout
+	terminal --> k apply -f rollout-with-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/blue-green-deployment created
+	service/rollout-bluegreen-active created
+	service/rollout-bluegreen-preview created
+
+
+Deploy the ingress controller
+	terminal --> k apply -f ingress.yaml
+
+	# result: ingress.networking.k8s.io/blue-green-ingress created
+	
+
+
+We can check the the rollout status on http://rollouts.localhost:32073/rollouts/blue-green/
+
+Open the applicaton on http://blue-green.demo:32073/
+
+
+
+CASE - SUCCESSFUL ANALYSIS
+--------------------------
+
+Initiate update process by changing env value with correct one - "app-v2.html" in the rollout manifest file - rollout-with-analysis.yaml
+
+rollout-with-analysis.yaml
+-----------------------------------------------
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v2.html"             # environment variable value - change to "app-v2.html" and apply to initiate update
+        ports:
+...
+-----------------------------------------------
+save changes
+
+
+Apply changes of the rollout
+	terminal --> k apply -f rollout-with-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/blue-green-deployment configured
+	service/rollout-bluegreen-active unchanged
+	service/rollout-bluegreen-preview unchanged
+
+
+We can check the the rollout status on http://rollouts.localhost:32073/rollouts/blue-green/
+After the pre-analysis passes the update of the new revision will be finished and the old revision replicaset will be terminated.
+
+Check the new revision of the applicaton on http://blue-green.demo:32073/
+
+
+List pods to find the analysis pod
+	terminal --> k get pods
+
+	# result:
+	NAME                                                            READY   STATUS      RESTARTS   AGE
+	3b9b732e-ae27-4648-8189-1d084339fe85.success-rate-pre.1-62989   0/1     Completed   0          3m38s	# target pod
+	blue-green-deployment-6cf668b447-29xc8                          1/1     Running     0          3m39s
+	blue-green-deployment-6cf668b447-w57ft                          1/1     Running     0          3m39s
+	blue-green-deployment-6cf668b447-x5z4w                          1/1     Running     0          3m39s
+	blue-green-deployment-6cf668b447-xpvbw                          1/1     Running     0          3m39s
+
+
+Print he logs of the analysis pod
+	terminal --> k logs 3b9b732e-ae27-4648-8189-1d084339fe85.success-rate-pre.1-62989
+
+	# result: Success rate: 5/5	# this means that the analysis is successful and the new revision app is running
+
+
+
+
+CASE - FAILED ANALYSIS
+----------------------
+
+Initiate update process by changing env value with incorrect one - "app-v5.html" in the rollout manifest file - rollout-with-analysis.yaml
+
+rollout-with-analysis.yaml
+-----------------------------------------------
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v5.html"             # set incorrect value "app-v5.html" and apply to initiate update failed analysis
+        ports:
+...
+-----------------------------------------------
+save changes
+
+
+Apply changes of the rollout
+	terminal --> k apply -f rollout-with-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/blue-green-deployment configured
+	service/rollout-bluegreen-active unchanged
+	service/rollout-bluegreen-preview unchanged
+
+
+We can check the the rollout status on http://rollouts.localhost:32073/rollouts/blue-green/
+After the pre-analysis failed the update of the new revision will be aborted and the new revision replicaset will scale down.
+
+Check previous revision 2 of the applicaton on http://blue-green.demo:32073/
+Revision 3 is failed.
+
+List pods to find the analysis pod
+	terminal --> k get pods
+
+	# result:
+	NAME                                                            READY   STATUS        RESTARTS   AGE
+	3b9b732e-ae27-4648-8189-1d084339fe85.success-rate-pre.1-62989   0/1     Completed     0          15m
+	blue-green-deployment-6668449db4-bqmhm                          1/1     Terminating   0          81s
+	blue-green-deployment-6668449db4-l56vm                          1/1     Terminating   0          81s
+	blue-green-deployment-6668449db4-w7chw                          1/1     Terminating   0          81s
+	blue-green-deployment-6668449db4-xxxq9                          1/1     Terminating   0          81s
+	blue-green-deployment-6cf668b447-29xc8                          1/1     Running       0          15m
+	blue-green-deployment-6cf668b447-w57ft                          1/1     Running       0          15m
+	blue-green-deployment-6cf668b447-x5z4w                          1/1     Running       0          15m
+	blue-green-deployment-6cf668b447-xpvbw                          1/1     Running       0          15m
+	f2a02225-0b48-42a2-80f1-18aa6e1f02ee.success-rate-pre.1-bqv7k   0/1     Error         0          80s    # target pod
+
+
+Print he logs of the analysis pod
+	terminal --> k logs f2a02225-0b48-42a2-80f1-18aa6e1f02ee.success-rate-pre.1-bqv7k
+
+	# result: Success rate: 0/5	# this means that the analysis failed and the new revision app is aborted
+
+
+
+
+
+
+
+
+Using Post-promotion Analysis In Blue-green Deployment
+======================================================
+
+A Rollout using blue-green strategu can launch analysis run after the traffic switch to the new version using post promotion analysis. If post promotion analysis fails the rollout enters to aboted state and switches traffic back to the previous stable replicaset. When post analysis sis successful the rollout is considered fully promoted and the new replicaset will be mark as stable. The old replicaset will be scaled down according to scale down deplay time - 30 seconds by default.
+
+
+Delete the current (failed) rollout
+	terminal --> k delete -f rollout-with-analysis.yaml
+
+	# result:
+	rollout.argoproj.io "blue-green-deployment" deleted from blue-green namespace
+	service "rollout-bluegreen-active" deleted from blue-green namespace
+	service "rollout-bluegreen-preview" deleted from blue-green namespace
+
+
+We will use post-promotion analysis named post-promotion-analysis.yaml. This analysis uses the active service of the rollout because the replicaset is already deployed.
+
+post-promotion-analysis.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: success-rate-post ######## post-promotion-analysis
+spec:
+  args:
+  - name: service-port
+    value: "5000"
+  - name: service-namespace
+  metrics:
+  - name: success-rate-post
+    provider:
+      job:
+        metadata:
+          labels:
+            analysis: post-promotion # labels defined here will be copied to the Job object
+        spec:
+          backoffLimit: 0
+          template:
+            spec:
+              containers:
+              - name: success-rate-post
+                image: analysis
+                imagePullPolicy: Never
+                env:
+                - name: service_url
+                  value: "http://rollout-bluegreen-active.{{args.service-namespace}}.svc.cluster.local:{{args.service-port}}"
+                command: ["/bin/bash", "-c"]
+                args:
+                - ./app-success-rate.sh
+              restartPolicy: Never
+-----------------------------------------------
+
+Create the post promotion analysis
+	terminal --> k apply -f post-promotion-analysis.yaml
+
+	# result: analysistemplate.argoproj.io/success-rate-post created
+
+
+
+
+
+We will use the same rollout manifest file but with changed configurations. We switched the env value to be correct so the application can deploy and configure after promotion analysis section.
+
+
+rollout-with-analysis.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: blue-green-deployment
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: blue-green-deployment
+  template:
+    metadata:
+      labels:
+        app: blue-green-deployment
+    spec:
+      containers:
+      - name: blue-green                     # app name
+        image: blue-green                    # app image
+        imagePullPolicy: Never               # disable image pulling because we have it locally
+        env:
+        - name: html_name                    # environment name
+          value: "app-v1.html"               # environment value
+        ports:
+        - containerPort: 5000
+  strategy:
+    blueGreen:                                  # strategy
+      activeService: rollout-bluegreen-active
+      previewService: rollout-bluegreen-preview
+      autoPromotionEnabled: true                # Autopromotion enabled
+      # prePromotionAnalysis:                     # Pre-Promotion Analysis
+      #   templates:
+      #   - templateName: success-rate-pre        # used analysis template name
+      #   args:
+      #   - name: service-namespace
+      #     value: blue-green
+      postPromotionAnalysis:                  # Post-Promotion Analysis
+       templates:
+       - templateName: success-rate-post
+       args:
+       - name: service-namespace
+         value: blue-green
+      # abortScaleDownDelaySeconds: 10
+      # scaleDownDelaySeconds: 60
+      # previewReplicaCount: 2
+      # autoPromotionSeconds: 70
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-active                # active service
+spec:
+  selector:
+    app: blue-green-deployment
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-preview              # preview service
+spec:
+  selector:
+    app: blue-green-deployment
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+-----------------------------------------------
+
+
+
+
+Deploy the rollout
+	terminal --> k apply -f rollout-with-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/blue-green-deployment created
+	service/rollout-bluegreen-active created
+	service/rollout-bluegreen-preview created
+
+
+Deploy the ingress controller 				IF NOT DEPLOYED
+	terminal --> k apply -f ingress.yaml
+
+	# result: ingress.networking.k8s.io/blue-green-ingress created
+
+
+We can check the the rollout status on http://rollouts.localhost:32073/rollouts/blue-green/
+
+Open the applicaton on http://blue-green.demo:32073/
+
+
+
+CASE - SUCCESSFUL ANALYSIS
+--------------------------
+
+Initiate update process by changing env value with correct one - "app-v2.html" in the rollout manifest file - rollout-with-analysis.yaml
+
+rollout-with-analysis.yaml
+-----------------------------------------------
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v2.html"             # environment variable value - change to "app-v2.html" and apply to initiate update
+        ports:
+...
+-----------------------------------------------
+save changes
+
+
+Apply changes of the rollout
+	terminal --> k apply -f rollout-with-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/blue-green-deployment configured
+	service/rollout-bluegreen-active unchanged
+	service/rollout-bluegreen-preview unchanged
+
+
+We can check the the rollout status on http://rollouts.localhost:32073/rollouts/blue-green/
+After the update and post promotion analysis passes the of the old revision replicaset will be scaled down.
+
+Check the new revision of the applicaton on http://blue-green.demo:32073/
+
+
+List pods to find the analysis pod
+	terminal --> k get pods
+
+	# result:
+	NAME                                                             READY   STATUS      RESTARTS   AGE
+	31301a66-7824-4494-b034-ef984e67a8fa.success-rate-post.1-6zgj4   0/1     Completed   0          2m15s	# target pod
+	blue-green-deployment-6cf668b447-2nnsh                           1/1     Running     0          2m16s
+	blue-green-deployment-6cf668b447-4h5hp                           1/1     Running     0          2m16s
+	blue-green-deployment-6cf668b447-7rmjv                           1/1     Running     0          2m16s
+	blue-green-deployment-6cf668b447-rff5v                           1/1     Running     0          2m16s
+
+
+Print he logs of the analysis pod
+	terminal --> k logs 31301a66-7824-4494-b034-ef984e67a8fa.success-rate-post.1-6zgj4
+
+	# result: Success rate: 5/5	# this means that the analysis failed and the new revision app is aborted
+
+
+
+
+
+
+CASE - FAILED ANALYSIS
+----------------------
+
+Initiate update process by changing env value with incorrect one - "app-v5.html" in the rollout manifest file - rollout-with-analysis.yaml
+
+rollout-with-analysis.yaml
+-----------------------------------------------
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v5.html"             # set incorrect value "app-v5.html" and apply to initiate update failed analysis
+        ports:
+...
+-----------------------------------------------
+save changes
+
+
+Apply changes of the rollout
+	terminal --> k apply -f rollout-with-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/blue-green-deployment configured
+	service/rollout-bluegreen-active unchanged
+	service/rollout-bluegreen-preview unchanged
+
+
+We can check the the rollout status on http://rollouts.localhost:32073/rollouts/blue-green/
+After the update and post analysis failed the new revision will be aborted and the new revision replicaset will scale down. The previous stable revision will stay active.
+
+Check previous revision 2 of the applicaton on http://blue-green.demo:32073/
+Revision 3 is failed.
+
+List pods to find the analysis pod
+	terminal --> k get pods
+
+	# result:
+	NAME                                                            READY   STATUS        RESTARTS   AGE
+	31301a66-7824-4494-b034-ef984e67a8fa.success-rate-post.1-6zgj4   0/1     Completed     0          6m19s
+	9a895b4c-fed5-4bd1-8bc6-c11e02de29b0.success-rate-post.1-xprl6   0/1     Error         0          89s	# target pod
+
+
+Print he logs of the analysis pod
+	terminal --> k logs 9a895b4c-fed5-4bd1-8bc6-c11e02de29b0.success-rate-post.1-xprl6
+
+	# result: Success rate: 1/5	# this means that the analysis failed and the new revision app is aborted
+
+
+
+
+
+
+
+
+
+Analysis Template Arguments
+===========================
+
+Delete the last rollout
+	terminal --> k delete -f rollout-with-analysis.yaml
+
+	# result:
+	rollout.argoproj.io "blue-green-deployment" deleted from blue-green namespace
+	service "rollout-bluegreen-active" deleted from blue-green namespace
+	service "rollout-bluegreen-preview" deleted from blue-green namespace
+
+
+Analysis template may declare a set of arguments that can be passed by rollouts. The arguments can then be used as a metrics configuration and a resolve at a time that analysis run is created.
+
+In the example we will use namespace argument (namespace) and the port of the app (5000).
+We configure the arguments in the analysis template and we are required to have the corresponding configuration in the rollout.
+If argument value is not configured in the analysis template we are required to set an argument anme and value in the rollout analysis section. (example - namespace)
+
+
+post-promotion-analysis.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: success-rate-post ######## post-promotion-analysis
+spec:
+  args:
+  - name: service-port                              # port argument
+    value: "5000"                                   # argument value
+  - name: service-namespace                         # namespace argument
+  metrics:
+  - name: success-rate-post
+    provider:
+      job:
+        metadata:
+          labels:
+            analysis: post-promotion # labels defined here will be copied to the Job object
+        spec:
+          backoffLimit: 0
+          template:
+            spec:
+              containers:
+              - name: success-rate-post
+                image: analysis
+                imagePullPolicy: Never
+                env:
+                - name: service_url
+                  value: "http://rollout-bluegreen-active.{{args.service-namespace}}.svc.cluster.local:{{args.service-port}}"
+                command: ["/bin/bash", "-c"]
+                args:
+                - ./app-success-rate.sh
+              restartPolicy: Never
+-----------------------------------------------
+
+Create the post promotion analysis
+	terminal --> k apply -f post-promotion-analysis.yaml
+
+	# result: analysistemplate.argoproj.io/success-rate-post created
+
+
+
+rollout-with-analysis.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: blue-green-deployment
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: blue-green-deployment
+  template:
+    metadata:
+      labels:
+        app: blue-green-deployment
+    spec:
+      containers:
+      - name: blue-green                     # app name
+        image: blue-green                    # app image
+        imagePullPolicy: Never               # disable image pulling because we have it locally
+        env:
+        - name: html_name                    # environment name
+          value: "app-v1.html"               # environment value
+        ports:
+        - containerPort: 5000
+  strategy:
+    blueGreen:                                  # strategy
+      activeService: rollout-bluegreen-active
+      previewService: rollout-bluegreen-preview
+      autoPromotionEnabled: true                # Autopromotion enabled
+      # prePromotionAnalysis:                     # Pre-Promotion Analysis
+      #   templates:
+      #   - templateName: success-rate-pre        # used analysis template name
+      #   args:
+      #   - name: service-namespace
+      #     value: blue-green
+      postPromotionAnalysis:                  # Post-Promotion Analysis
+       templates:
+       - templateName: success-rate-post
+       args:
+       - name: service-namespace              # argument for analysis app - namespace
+         value: blue-green                    # argument value
+      # abortScaleDownDelaySeconds: 10
+      # scaleDownDelaySeconds: 60
+      # previewReplicaCount: 2
+      # autoPromotionSeconds: 70
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-active                # active service
+spec:
+  selector:
+    app: blue-green-deployment
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-preview              # preview service
+spec:
+  selector:
+    app: blue-green-deployment
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+-----------------------------------------------
+
+Deploy the rollout
+	terminal --> k apply -f rollout-with-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/blue-green-deployment created
+	service/rollout-bluegreen-active created
+	service/rollout-bluegreen-preview created
+
+
+Deploy the ingress controller 				IF NOT DEPLOYED
+	terminal --> k apply -f ingress.yaml
+
+	# result: ingress.networking.k8s.io/blue-green-ingress created
+
+
+We can check the the rollout status on http://rollouts.localhost:32073/rollouts/blue-green/
+
+Open the applicaton on http://blue-green.demo:32073/
+
+
+CASE - SUCCESSFUL ANALYSIS
+--------------------------
+
+Initiate update process by changing env value with correct one - "app-v2.html" in the rollout manifest file - rollout-with-analysis.yaml
+
+rollout-with-analysis.yaml
+-----------------------------------------------
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v2.html"             # environment variable value - change to "app-v2.html" and apply to initiate update
+        ports:
+...
+-----------------------------------------------
+save changes
+
+
+Apply changes of the rollout
+	terminal --> k apply -f rollout-with-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/blue-green-deployment configured
+	service/rollout-bluegreen-active unchanged
+	service/rollout-bluegreen-preview unchanged
+
+
+We can check the the rollout status on http://rollouts.localhost:32073/rollouts/blue-green/
+After the update and post promotion analysis with arguments passes the of the old revision replicaset will be scaled down.
+
+Check the new revision of the applicaton on http://blue-green.demo:32073/
+
+
+List pods to find the analysis pod
+	terminal --> k get pods
+
+	# result:
+	NAME                                                             READY   STATUS        RESTARTS   AGE
+	7bda0b82-d0b5-4b53-a463-acca2bae8908.success-rate-post.1-v96rj   0/1     Completed     0          66s
+
+
+Print he logs of the analysis pod
+	terminal --> k logs 7bda0b82-d0b5-4b53-a463-acca2bae8908.success-rate-post.1-v96rj
+
+	# result: Success rate: 5/5	# this means that the analysis failed and the new revision app is aborted
+
+
+
+CLEAN THE CLUSTER
+-----------------
+
+Delete the 'blue-green' namespace to delete all resources in it
+	terminal --> k delete ns blue-green
+
+	# result: namespace "blue-green" deleted
+
+Or delete every used resource if we don't know where they are deployed:
+
+Delete the rollouts to keep the cluster fresh and clean
+	terminal --> k delete -f rollout-with-analysis.yaml
+
+	# result:
+	rollout.argoproj.io "blue-green-deployment" deleted from blue-green namespace
+	service "rollout-bluegreen-active" deleted from blue-green namespace
+	service "rollout-bluegreen-preview" deleted from blue-green namespace
+
+Delete the ingress controller to keep the cluster fresh and clean
+	terminal --> k delete -f ingress.yaml
+
+	# result: ingress.networking.k8s.io "blue-green-ingress" deleted from blue-green namespace
+
+Delete the analysis resources to keep the cluster fresh and clean
+	terminal --> k delete -f post-promotion-analysis.yaml
+	terminal --> k delete -f pre-promotion-analysis.yaml
+	
+	# result: analysistemplate.argoproj.io "success-rate-post" deleted from blue-green namespace
+	# result: analysistemplate.argoproj.io "success-rate-pre" deleted from blue-green namespace
+
+
+
+
+
+
+ClusterAnalysisTemplates
+========================
+
+This templates are useful when we want to share an analysis template across multiple rollouts and different namespaces and avoid duplicating same template in every namespace. We have 2 differences with the common analysis template
+	- Analysis tpye - ClusterAnalysisTemplate
+	- Rollout analysis section we define 
+-----------------------------------------------
+      autoPromotionEnabled: true                  # Autopromotion enabled
+      # prePromotionAnalysis:                     # Pre-Promotion Analysis section
+      #   templates:
+      #   - templateName: success-rate-pre
+      #     clusterScope: true                    # cluster scope config
+      #   args:
+      #   - name: service-namespace
+      #     value: blue-green
+      postPromotionAnalysis:                  # Post-Promotion Analysis section
+       templates:
+       - templateName: success-rate-post
+         clusterScope: true                   # cluster scope config
+       args:
+       - name: service-namespace
+         value: blue-green
+-----------------------------------------------
+
+
+
+
+
+
+
+
+Using Analysis In Canary Deployment
+===================================
+
+
+We will use image canary created in section '13 - Argo-rollouts canary deployment strategy' with two application versions in it.
+
+Load the image in the cluster
+	terminal --> kind load docker-image canary --name kind
+
+Create 'canary' namespace
+	terminal --> k create ns canary
+
+	# result: namespace/canary created
+
+Set 'canary' namespace as default namespace
+	terminal --> k config set-context --current --namespace=canary
+
+	# result: Context "kind-kind" modified.
+
+Confirm default namespace modification
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       canary	# current cluster and namepsace
+
+
+
+PROVIDER EXPLOANATION
+---------------------
+
+We will use different provider for the canary strategy - Web Provider
+
+We can check the official documentation of Web Provider here - https://argo-rollouts.readthedocs.io/en/stable/analysis/web/
+
+Web Provider makes request (GET|POST|PUT) to a URL and the response must be a JSON content.
+
+Example response:
+-----------------------------------------------
+{
+  "data":
+  {
+    "ok": true
+  }f
+}
+-----------------------------------------------
+
+We have 2 different conditions and we can use one of them in this provider.
+	- successCondition
+	- failureCondition
+
+Is this is the response: "successCondition: .tada.ok == true", our analysis is successful
+Is this is the response: "successCondition: .tada.ok == false", our analysis is faled
+
+
+
+
+RESOURCES
+---------
+
+We have several resources that we will use in this example:
+	- Dockerfile 					# used for creating a background canary analysis app image
+	- analysis-app.py				# python analysis app
+	- web-analysis-deployment.yaml			# deployment for web analysis app
+	- canary-analysis.yaml				# analysis CRD
+	- ingress.yaml					# ingress controller for exposing the applications
+	- rollout-with-background-analysis.yaml		# rollout with background analysis and setweight service
+	- rollout-with-inline-analysis.yaml		# rollout with inline analysis and setweight service
+
+
+
+CREATE WEB ANALYSIS IMAGE AND DEPLOY IT AS A SEPARATE SERVICE
+-------------------------------------------------------------
+
+We will create web-analysis image and deploy it as a separate service and we will use it in the canary rollout.
+
+
+Dockerfile
+-----------------------------------------------
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install required Python packages
+RUN pip install flask requests
+
+# Copy the Flask app
+COPY analysis-app.py .
+
+# Expose the port
+EXPOSE 5001
+
+# Run the Flask app
+CMD ["python", "analysis-app.py"]
+-----------------------------------------------
+
+
+analysis-app.py
+-----------------------------------------------
+### WE are using a flask script to get the url of the application and try to connect to it 5 times at 5 seconds intervals and returns one of the true or false values based on "200 response_code" in a json format, if the success_rate is 80% or more , it returns "true" value, Otherwise it returns "false" value
+from flask import Flask, request, jsonify
+import requests, time
+
+app = Flask(__name__)
+
+@app.route('/measure_success_rate', methods=['POST'])
+def measure_success_rate():
+    url = request.json.get('url')
+
+    if not url:
+        return jsonify({'error': 'URL is missing in the request body'}), 400
+
+    success_count = 0
+
+    for _ in range(5):
+        try:
+            response = requests.get(url)
+        except requests.exceptions.RequestException:
+            pass
+        else:
+            if response.status_code == 200:
+                success_count += 1
+        time.sleep(5)
+        
+    success_rate = (success_count / 5) * 100
+    if int(success_rate) >= 80:
+        return jsonify({'data': {'ok': 'true'}})
+    else:
+        return jsonify({'data': {'ok': 'false'}})
+
+if __name__ == '__main__':
+    # Run on all interfaces so it's accessible within the cluster
+    app.run(host='0.0.0.0', port=5001)
+-----------------------------------------------
+
+
+Build image for web-analysis
+	trminal --> docker build -t web-analysis .
+
+Load the image into the cluster
+	terminal --> kind load docker-image web-analysis --name kind
+
+
+Create deployment for the analysis app called web-analysis-deployment.yaml
+
+web-analysis-deployment.yaml
+-----------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-analysis
+  namespace: canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-analysis
+  template:
+    metadata:
+      labels:
+        app: web-analysis
+    spec:
+      containers:
+      - name: web-analysis
+        image: web-analysis
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 5001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-analysis
+  namespace: canary
+spec:
+  selector:
+    app: web-analysis
+  ports:
+  - protocol: TCP
+    port: 5001
+    targetPort: 5001
+  type: ClusterIP
+-----------------------------------------------
+
+Deploy the analysis application
+	terminal --> k apply -f web-analysis-deployment.yaml
+
+	# result:
+	deployment.apps/web-analysis created
+	service/web-analysis created
+
+Check if the serice is running
+	terminal --> kubectl get pods -n canary -l app=web-analysis
+
+	# result:
+	NAME                            READY   STATUS    RESTARTS   AGE
+	web-analysis-5f9bc64f67-2tgn6   1/1     Running   0          6m29s
+
+We can check the logs of the analysis app
+	terminal --> kubectl logs -f deployment/web-analysis -n canary
+
+
+
+
+Next is the canary-analysis CRD:
+
+canary-analysis.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: success-rate
+  namespace: canary
+spec:
+  args:
+  - name: service_port      # This is the variable related to the ip address where the analysis-app.py is located
+    value: "5001"           # port of the analysis app
+    # WE are using a flask script to get the url of the application and try to connect to it 5 times at 5 seconds intervals and returns one of the true or 
+    # false values based on "200 response_code" in a json format, if the success_rate is 80% or more , it returns "true" value, Otherwise it returns "false" value,
+    # you can find this simple app in the current directory (its name is analysis-app.py).
+  metrics:
+  - name: success-rate
+    successCondition: result == "true"
+    provider:
+      web:
+        method: POST
+        # Use Kubernetes service DNS name instead of external IP
+        url: "http://web-analysis.canary.svc.cluster.local:{{args.service_port}}/measure_success_rate"
+        timeoutSeconds: 50
+        headers:
+          - key: Content-Type             # if body is a json, it is recommended to set the Content-Type
+            value: "application/json"
+        jsonBody:                         # If using jsonBody Content-Type header will be automatically set to json
+          url: "http://rollouts-setweight.canary.svc.cluster.local:5000"
+        jsonPath: "{$.data.ok}"
+-----------------------------------------------
+
+Deploy the canary analysy
+	terminal --> k apply -f canary-analysis.yaml
+
+	# result: analysistemplate.argoproj.io/success-rate created
+	
+
+
+
+We can use canary analysis in 2 ways
+	- analysis running in background
+	- inline analysis - performed as a step
+
+
+BACKGROUND ANALYSIS
+-------------------
+
+Background analysis is configured before the steps. This mean that when we initiate update, the analysis will run in parallel with the update. The analysis will NOT block the steps of the update but if fails the rollout will be aborted and the old version will be rolled back.
+
+
+rollout-with-background-analysis.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rollouts-setweight
+  namespace: canary
+spec:
+  replicas: 5
+  strategy:
+    canary:
+      analysis:      #### This is a Backgound Analysis
+        templates:
+        - templateName: success-rate
+        args:
+          - name: service_port #### This is the variable related to the port of analysis-app.py flask app
+            value: "5001"
+      steps:
+      - setWeight: 20
+      - pause: {}
+      - setWeight: 40
+      - pause: {duration: 10s}
+      # - analysis: #### This is an Inline Analysis
+          # templates:
+          # - templateName: success-rate
+          # args:
+          # - name: service_port #### This is the variable related to the port of analysis-app.py flask app
+          #   value: "5001"
+      - setWeight: 60
+      - pause: {duration: 20s}
+      - setWeight: 80
+      - pause: {duration: 1m}
+  selector:
+    matchLabels:
+      app: rollouts-setweight
+  template:
+    metadata:
+      labels:
+        app: rollouts-setweight
+    spec:
+      containers:
+      - name: rollouts-setweight
+        image: canary # This is the same image that we built in blue-green session , I just re-tagged it
+        imagePullPolicy: Never
+        env:
+        - name: html_name
+          value: "app-v2.html"
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1                       # service
+kind: Service
+metadata:
+  name: rollouts-setweight           # service name
+  namespace: canary
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rollouts-setweight
+-----------------------------------------------
+
+
+We will deploy also ingress to expose the host address of the main application.
+
+ingress.yaml
+-----------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: canary-ingress
+  namespace: canary
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: rollouts-setweight.demo
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rollouts-setweight
+            port:
+              number: 5000
+-----------------------------------------------
+
+Deploy the rollout
+	terminal --> k apply -f rollout-with-background-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-setweight created
+	service/rollouts-setweight created
+		
+
+Deploy the ingress
+	terminal --> k apply -f ingress.yaml
+	
+	# result: ingress.networking.k8s.io/rolling-update created
+
+
+Add host address to Windows host list
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 rollouts-setweight.demo'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim etc/hosts
+	- Add '127.0.0.1 rollouts-setweight.demo'
+	- save changes and exit - escape, :wq!, enter
+
+
+We can check the the rollout status on http://rollouts.localhost:32073/rollouts/canary
+
+Open the applicaton on http://rollouts-setweight.demo:32073/
+
+
+
+THE UPDATE
+----------
+
+Initiate update process by changing env value with correct one - "app-v2.html" in the rollout manifest file rollout-with-background-analysis.yaml
+
+rollout-with-background-analysis.yaml
+-----------------------------------------------
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v2.html"             # environment variable value - change to "app-v2.html" and apply to initiate update
+        ports:
+...
+-----------------------------------------------
+save changes
+
+
+Apply changes of the rollout
+	terminal --> k apply -f rollout-with-background-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-setweight configured
+	service/rollouts-setweight unchanged
+
+
+
+We can check the the rollout status on http://rollouts.localhost:32073/rollouts/canary
+
+We can see that one pod with the new version is created, one pod in the old revision replicaset is terminating and the analysis is running. The analysis finishes successfully and we are able to promote the update to the next step. If the analysis fail the update will aborted and the old version will be rolled back.
+
+Promote the manual step that we configured (step 1) with button on the menu or with CLI
+	terminal --> kargo promote rollouts-setweight
+
+	# result: rollout 'rollouts-setweight' promoted
+
+In the Argo Rollouts UI (http://rollouts.localhost:32073/rollouts/canary) we can see that next steps from the configuration are running. Pods in the new version replicaset are created and pods fomr the old version replicaset are terminating.
+
+Check the new verson of the applicaton on http://rollouts-setweight.demo:32073/
+
+
+
+Delete the rollout with background analysis for hte next example
+	terminal --> k delete -f rollout-with-background-analysis.yaml
+
+	# result:
+	rollout.argoproj.io "rollouts-setweight" deleted from canary namespace
+	service "rollouts-setweight" deleted from canary namespace
+
+
+
+
+
+
+
+INLINE ANALYSIS
+---------------
+
+This rollout uses analysis performed as a step. In this case we configure analysis as step 3. The analysis will start when its step comes on and it will block the rest of the update process until it finishes. If it is successfull the next step will start. If it fails the the update will be aborted and the old version will be rolled back.
+
+
+rollout-with-inline-analysis.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rollouts-setweight
+  namespace: canary
+spec:
+  replicas: 5
+  strategy:
+    canary:
+    # analysis:                             # This is a Backgound Analysis
+    #    templates:
+    #    - templateName: success-rate
+    #    args:
+    #      - name: service_port             # This is the variable related to the port of analysis-app.py flask app
+    #        value: "5001"
+      steps:
+      - setWeight: 20
+      - pause: {}
+      - setWeight: 40
+      - pause: {duration: 10s}
+      - analysis:                           # This is an Inline Analysis
+          templates:
+          - templateName: success-rate
+          args:
+          - name: service_port              # This is the variable related to the port of analysis-app.py flask app
+            value: "5001"
+      - setWeight: 60
+      - pause: {duration: 20s}
+      - setWeight: 80
+      - pause: {duration: 1m}
+  selector:
+    matchLabels:
+      app: rollouts-setweight
+  template:
+    metadata:
+      labels:
+        app: rollouts-setweight
+    spec:
+      containers:
+      - name: rollouts-setweight
+        image: canary                      # This is the same image that we built in blue-green session , I just re-tagged it
+        imagePullPolicy: Never
+        env:
+        - name: html_name
+          value: "app-v1.html"
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1                       # service
+kind: Service
+metadata:
+  name: rollouts-setweight           # service name
+  namespace: canary
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rollouts-setweight
+-----------------------------------------------
+
+Deploy the rollout
+	terminal --> k apply -f rollout-with-inline-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-setweight created
+	service/rollouts-setweight created
+
+
+We can check the the rollout status on http://rollouts.localhost:32073/rollouts/canary
+
+Open the applicaton on http://rollouts-setweight.demo:32073/
+
+
+
+THE UPDATE
+----------
+
+Initiate update process by changing env value with correct one - "app-v2.html" in the rollout manifest file - rollout-with-inline-analysis.yaml
+
+rollout-with-inline-analysis.yaml
+-----------------------------------------------
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v2.html"             # environment variable value - change to "app-v2.html" and apply to initiate update
+        ports:
+...
+-----------------------------------------------
+save changes
+
+
+Apply changes of the rollout
+	terminal --> k apply -f rollout-with-inline-analysis.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-setweight configured
+	service/rollouts-setweight unchanged
+
+
+Check the the rollout status on http://rollouts.localhost:32073/rollouts/canary
+We can see that one pod in the new version replicaset is created. And one pod from the old version replicaset is terminating.
+Promote the rollout with 'Promote' button or with the CLI
+	terminal --> kargo promote rollouts-setweight
+
+	# result: rollout 'rollouts-setweight' promoted
+
+
+No we can see that after step 2 Analysis step is executed. The analaysis passed successfully and next step come in place. The update finishes successfully. If the analysis step fails the update will be aborted and the old version replicaset will be rolled back.
+
+We can check the new version of the app on http://rollouts-setweight.demo:32073/
+
+
+
+CLEAN THE CLUSTER
+-----------------
+
+Delete 'canary' namespace to delete all craeted resources in it
+	terminal --> k delete ns canary
+
+	# result: namespace "canary" deleted
+
+Or delete each created resource in the canary namespace one by one:
+
+Delete the rollout 
+	terminal --> k delete -f rollout-with-inline-analysis.yaml
+
+	# result:
+	rollout.argoproj.io "rollouts-setweight" deleted from canary namespace
+	service "rollouts-setweight" deleted from canary namespace
+
+Delete the ingress
+	terminal --> k delete -f ingress.yaml
+
+	# result: ingress.networking.k8s.io "rolling-update" deleted from canary namespace
+
+Delete the analysis
+	terminal --> k delete -f canary-analysis.yaml
+
+	#r esult: analysistemplate.argoproj.io "success-rate" deleted from canary namespace
+
+Delete the deployment for the analysis app
+	terminal --> k delete -f web-analysis-deployment.yaml
+
+	# result:
+	deployment.apps "web-analysis" deleted from canary namespace
+	service "web-analysis" deleted from canary namespace
+
+
+
