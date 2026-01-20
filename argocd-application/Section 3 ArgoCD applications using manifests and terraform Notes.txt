@@ -1,0 +1,1710 @@
+03 - Argocd Applications & Defining Argocd applications using manifests and terraform
+
+Video Link - https://www.youtube.com/watch?v=3tzMmhvD6p0&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=4
+
+Video Agenda:
+
+00:00 Contribute To Git Repo Of The Course
+00:01:50 What is Argocd Applicaton
+00:02:45 Creating The First Application
+00:23:09 The Ways To Define Kubernetes Manifests
+00:25:50 Using Helm as The Source
+00:38:09 Using Directory as The Source
+00:55:50 Creating Argocd Applications Using Terraform
+
+Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+
+
+CREATE OUR FIRST ARGOCD APPLICATION
+===================================
+
+Prerequisites:
+--------------
+1. Set alias for using k instead of kubectl. This will save us some time and prevent mistyping.
+	terminal --> alias k=kubectl
+2. Set default namespace to be argocd namespace. This will short our commands and prevent mistakes
+	terminal --> k config set-context --current --namespace=argocd
+	# result: Context "kind-kind" modified.
+
+Configrm default namespace configuration
+	terminal --> k get pods			# the result should list all pods in the argocd namespace
+
+3. Find the password to connect to ArgoCD server
+	shell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+	# result: password
+
+Connect to argocd server
+- browse to localhost:32073 or localhost depending on the configuration
+- Username: admin
+- Password: password 
+
+
+
+CONNECT WITH ARGOCD CLI
+-----------------------
+
+I. Install ArgoCD CLI locally:
+-----------------------------------------------------------------------------
+1. Open PowerShell as admin
+
+2. Download  and install ArgoCD binary 
+	Shell as admin terminal -->
+$version = (Invoke-RestMethod https://api.github.com/repos/argoproj/argo-cd/releases/latest).tag_name
+$url = "https://github.com/argoproj/argo-cd/releases/download/$version/argocd-windows-amd64.exe"
+Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\argocd.exe"
+New-Item -Path "C:\Program Files\ArgoCD" -ItemType Directory -Force
+Move-Item "$env:TEMP\argocd.exe" "C:\Program Files\ArgoCD\argocd.exe" -Force
+
+3. Add argocd to environment Path
+	shell terminal -->
+$oldPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+$newPath = $oldPath + ";C:\Program Files\ArgoCD"
+[Environment]::SetEnvironmentVariable("Path", $newPath, "Machine")
+
+4. Confirm Argocd ClI installation
+	shell terminal --> argocd version --client
+
+	# result:
+  	BuildDate: 2025-11-30T12:12:42Z
+  	GitCommit: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  	GitTreeState: clean
+  	GoVersion: go1.25.0
+  	Compiler: gc
+  	Platform: windows/amd64
+-----------------------------------------------------------------------------
+
+
+
+
+
+II. Find ArgoCD server IP and connect to it with Argocd CLI
+=======================================================================
+
+
+IF cluster has only one Node and its configured with NodePort: 32073 service we will use the IP of the Node. - NOT OUR SCENARIO
+-------------------------------------------------------------------------------------------------------------------------------
+
+For more information about cluster and ArgoCD configuration look in section 02 - Setting-up ArgoCD.
+
+1. Find ArgoCD server pod
+	terminal --> k get pods -n argocd -o wide
+
+NAME                            READY   STATUS    RESTARTS      AGE   IP           NODE           NOMINATED NODE   READINESS GATES
+argocd-server-7b5cd9d568-bwc2s  1/1     Running   0             77s   10.244.1.6   kind-worker2   <none>           <none>
+
+We can see that argocd server pod in on 'kind-worker2' Node
+
+
+2. Find the IP address of kind-worker node
+	terminal --> k get nodes -o wide
+
+NAME                 STATUS   ROLES           AGE     VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE                         KERNEL-VERSION                       CONTAINER-RUNTIME
+kind-control-plane   Ready    control-plane   4m16s   v1.34.0   172.18.0.4    <none>        Debian GNU/Linux 12 (bookworm)   5.15.146.1-microsoft-standard-WSL2   containerd://2.1.3
+
+# result: 172.18.0.4
+
+Find the port of the ingress controller (info only)
+	terminal --> k get svc -n ingress-nginx
+
+# result:
+NAME                                 TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                      AGE
+ingress-nginx-controller             NodePort    10.96.139.113   <none>        80:32386/TCP,443:32734/TCP   4m21s
+ingress-nginx-controller-admission   ClusterIP   10.96.159.125   <none>        443/TCP                      4m21s
+
+The port shown are for internal communication (between Nodes). 
+
+3. Find the password to connect to ArgoCD server
+	shell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+	# result: password
+
+4. Connect to the Node
+	terminal --> argocd login 172.18.0.4:32073 --insecure --grpc-web --username admin
+	terminal --> y
+	terminal --> password
+
+	# result:
+	'admin:login' logged in successfully
+	Context '172.18.0.4:32073' updated
+
+
+
+
+
+Our current cluster is created with Kind and container configuration below. We connect to the port in the cluster configuration (container configuration) and nginx ingress controller server configuration 'hostname: localhost'. OUR CURRENT CONFIGURATION
+------------------------------------------------------------------------------------------------------------------------------
+
+For more information about cluster and ArgoCD configuration look in section 02 - Setting-up ArgoCD.
+
+
+Nginx ingress controller configuration
+kind-config.yaml
+-------------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 32073				
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 32074			# target port
+    protocol: TCP
+- role: worker
+- role: worker
+-------------------------------------------------
+We are using host port 32073
+
+values-nginx.yaml
+--------------------------------------------------------------------
+server:
+    # Argo CD server ingress configuration
+    ingress:
+        # -- Enable an ingress resource for the Argo CD server
+        enabled: true
+        annotations:
+            nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+
+        # -- Defines which ingress controller will implement the resource
+        ingressClassName: nginx
+
+        # -- Argo CD server hostname
+        # @default -- `""` (defaults to global.domain)
+        hostname: "localhost"						# target hostname
+
+        # -- The path to Argo CD server
+        path: /
+
+        # -- Ingress path type. One of `Exact`, `Prefix` or `ImplementationSpecific`
+        pathType: Prefix
+
+        # -- Enable TLS configuration for the hostname defined at `server.ingress.hostname`
+        ## TLS certificate will be retrieved from a TLS secret `argocd-server-tls`
+        ## You can create this secret via `certificate` or `certificateSecret` option
+        tls: true
+--------------------------------------------------------------------
+
+Find the password to connect to ArgoCD server
+	shell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+	# result: password
+
+
+Connect to the Node with ArgoCD CLI
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin --password Tip-kdHFNljqdnq3
+	or
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin
+	terminal --> password
+
+	# result:
+	'admin:login' logged in successfully
+	Context 'localhost:32074' updated
+=======================================================================
+
+
+
+
+
+
+
+
+CREATE HELM CHART AS GROUP MANIFESTS (APPLICATION)
+==================================================
+
+Create a repository that we will use for Argocd labs
+
+ArgoCD Labs:
+|
+argocd-application
+	|
+	helm-charts
+		|
+		nginx				# files and folders are automatically created with helm
+		    |
+		    -- chrts dir
+		    -- templates dir
+		    -- .helmignore
+		    -- Chart.yaml
+		    -- values.yaml
+
+
+Create directory structure where we will manage manifests files
+	terminal --> mkdir argocd-application
+	terminal --> cd argocd-application
+
+	terminal --> mkdir helm-charts
+	terminal --> cd helm-charts
+
+Create helm charts for nginx nad configr creation
+	terminal --> helm create nginx			# result: Creating nginx
+	terminal --> cd nginx
+	terminal --? ls
+		
+Commit the nginx charts
+	terminal --> git add .
+	terminal --> git commit -m "Creating Nginx Helm Chart as the source of examples"
+	terminal --> git push origin main
+
+
+
+Create ArgoCD application maually
+---------------------------------
+
+We are working in Kubernetes default namespace.
+
+Create application manifest file - application-1.yaml
+	terminal --> notepad application-1.yaml
+	or
+	terminal --> code application-1.yaml
+
+application-1.yaml
+----------------------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: application-from-scratch
+spec:
+  destination:
+    namespace: default                		# where application will be deployed
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				# use default project for this lab
+  source:
+    path: argocd-application/helm-charts/nginx			# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs		# path to the argocd lab repo
+    targetRevision: main					# we can use branch name, commit ID or tag name
+----------------------------------------------------------------
+
+
+Apply the aookucation-1.yaml file
+	terminal --> k apply -f application-1.yaml
+
+	# result: application.argoproj.io/application-from-scratch created
+
+Confirm application creation
+	terminal --> k get application
+
+	# result:
+	NAME                       SYNC STATUS   HEALTH STATUS
+	application-from-scratch   OutOfSync     Missing			# SYNC STATUS is out of sync
+
+
+See the application in ArgoCD UI --> localhost:32074
+	- Click on the Application Object to visualize the grafic representation
+	- Synchronize the application manually
+		- Click on "SYNC" Button
+		- Click "SYCHRONIZE" Button
+
+	# now our application is synched
+
+List all deployed resources on our Kubernetes cluster
+	terminal --> k get all -n default
+
+# result:
+NAME                                                  READY   STATUS    RESTARTS   AGE
+pod/application-from-scratch-nginx-6bfd56d45f-tsfw7   1/1     Running   0          2m32s
+
+NAME                                     TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)   AGE
+service/application-from-scratch-nginx   ClusterIP   10.96.68.73   <none>        80/TCP    2m32s
+service/kubernetes                       ClusterIP   10.96.0.1     <none>        443/TCP   5d
+
+NAME                                             READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/application-from-scratch-nginx   1/1     1            1           2m32s
+
+NAME                                                        DESIRED   CURRENT   READY   AGE
+replicaset.apps/application-from-scratch-nginx-6bfd56d45f   1         1         1       2m32s
+
+
+We will outsync the application by changing values.yaml file in the repo by changin replicaCount: 2 and commit the changes.
+
+Every 3 minutes ArgoCD server refresh the state of our application in the UI by comparing the live state and the target state.
+	- We can refresh manually bu clicking the "REFRESH" button
+
+	- Now our application is outofsync
+
+	- Synchronize the application manually again
+		- Click on "SYNC" Button
+		- Click "SYCHRONIZE" Button
+	
+	# Now in the ArgoCD UI we see the second replica appear
+
+
+Update the local repository
+	terminal --> git pull
+
+
+DIFFERENT APPLICATION BUILDERS IN ARGOCD
+----------------------------------------
+We can build ArgoCD application with 2 tools
+	- Helm
+	- Kustomize
+
+The builder is not specified in the application manifest. When ArgoCD check the path of the configuration and detect Chart.yaml this means that the builder is Helm.
+
+
+
+
+RELEASES IN HELM MANAGED APPLICATIONS
+=====================================
+
+1. We set the application release in the application-1.yaml file
+
+application-1.yaml
+----------------------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: application-from-scratch
+spec:
+  destination:
+    namespace: default                		# where application will be deployed
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				# use default project for this lab
+  source:
+    helm: 					# added builder name - helm
+      releaseName: application-from-helm	# added release name
+    path: argocd-application/helm-charts/nginx			# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs		# path to the argocd lab repo
+    targetRevision: main					# we can use branch name, commit ID or tag name
+----------------------------------------------------------------
+
+2. Apply the changes
+	terminal --> k apply -f application-1.yaml
+
+	# result: application.argoproj.io/application-from-scratch configured
+
+In ArgoCD UI (localhost:32074) we can see changes in the application structure.
+
+3. Sync the changes with "Prune" option
+	- Click "SYNC" button
+		- Check "PRUNE" checkbox on the first checkbox line
+	- Click "SYNCHRONIZE" button
+
+	# The PRUNE option means that all old resources must be destroyed and new will be created
+	# We can see that the application name is also changed from 'application-from-scratch' to 'application-from-helm-nginx'
+
+
+
+
+
+MANAGE REPLICACOUNT FROM APPLICATION HELM MANIFEST
+--------------------------------------------------
+
+We will add changes in the Helm manifest files.
+
+
+
+1. Edit the application-1.yaml and add replicaCount param name and value:
+
+application-1.yaml
+----------------------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: application-from-scratch
+spec:
+  destination:
+    namespace: default                		# where application will be deployed
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				# use default project for this lab
+  source:
+    helm: 					# added builder name - helm
+      releaseName: application-from-helm	# added release name
+      parameters:
+        - name: "replicaCount"              # specified parameter name
+          value: "3"                        # parameter value
+    path: argocd-application/helm-charts/nginx			# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs		# path to the argocd lab repo
+    targetRevision: main					# we can use branch name, commit ID or tag name
+----------------------------------------------------------------
+
+2. Apply changes made
+	terminal --> k apply -f application-1.yaml
+
+	# result: application.argoproj.io/application-from-scratch configured
+
+
+In ArgoCD UI (localhost:32074) we can refresh the state by clicking the "REFRESH" button. Now the status of the app is outofsync.
+
+3. Sync the changes 
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+In the ArgoCD UI we can see that the replicaCount are now 3.
+
+!!! We synced the local repository !!!
+
+4. Update the remote repository
+	terminal --> git add .
+	terminal --> git commit -m "increased replicas to 3"
+	terminal --> git push
+
+
+
+
+MANAGE MUMLTIPLE PARAMETERS WITH MANIFEST FILES
+-----------------------------------------------
+
+Manage multiple parameter changes:
+----------------------------------
+
+When we change multiple parameters is recommended to use separate values files to manage them.
+
+1. In the GitHub repository, in folder "argocd-application/helm-charts/nginx" create new file called "custom-values.yaml".
+
+custom-values.yaml
+-----------------------------------------------
+replicaCount: "4"
+-----------------------------------------------
+
+- save and commit the file to the repo
+- Pull the changes to the local repo
+	terminal --> git pull
+
+
+2. Modify manifest file application-1.yaml and set to use the newly created custom-values.yaml file
+
+application-1.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: application-from-scratch
+spec:
+  destination:
+    namespace: default                		  # where application will be deployed
+    server: https://kubernetes.default.svc 	  # default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				                  # use default project for this lab
+  source:
+    helm: 					                  # added builder name - helm
+      releaseName: application-from-helm	  # added release name
+      valueFiles:                                 # added value files
+        - custom-values.yaml                      # added custom values
+    path: argocd-application/helm-charts/nginx			      # the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs		# path to the argocd lab repo
+    targetRevision: main					# we can use branch name, commit ID or tag name
+-----------------------------------------------
+
+
+3. Apply changes made
+	terminal --> k apply -f application-1.yaml
+
+	# result: application.argoproj.io/application-from-scratch configured
+
+4. Sync the changes 
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+Now in ArgoCD UI we can see that 4 replicas are up.
+
+
+
+
+
+
+
+USE OF HELM CHARTS
+==================
+
+ArgoCD Helm Documentation - https://argo-cd.readthedocs.io/en/latest/user-guide/helm/
+
+
+We can see that the sintax of the syntax of the manifest file is different.
+
+
+Create application-2.yaml file in the project.
+
+
+application-2.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sealed-secrets
+  namespace: argocd
+spec:
+  project: default
+  source:
+    chart: sealed-secrets					# chart name
+    repoURL: https://bitnami-labs.github.io/sealed-secrets	# chart repository
+    targetRevision: 1.16.1					# chart version
+    helm:
+      releaseName: sealed-secrets				# release name
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: default                                          # use default namespace
+-----------------------------------------------
+
+
+Apply the file
+	terminal --> k apply -f application-2.yaml
+
+	# result: application.argoproj.io/sealed-secrets created
+
+In ArgoCD UI we can see that new application called sealed-secrets appear.
+
+Sync the changes 
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+We can see App details. It is broken, however we will not fix it for now. Stop it or delete it. It is only for example purposes.
+
+Delete the application.
+
+
+
+
+
+USE DIRECTORY TOOL TO CREATE AN APPLICATION
+===========================================
+
+We will go over 3 parameters of the directory tool:
+	- exclude
+	- include
+	- recurse
+
+Download Repository - https://github.com/devopshobbies/argocd-tutorial and copy the folder v03-argocd-applications/directoryOfmanifests in our project. This manifests files are for simple ArgoCD application.
+
+Our ptoject structure looks like this now:
+
+argocd-application
+|
+---directoryOfmanifests
+|		|
+|		--- sub-directory
+|		|		|
+|		|		--- service.yaml
+|		|
+|		--- deployment.yaml
+|		--- service.yaml
+|		--- serviceaccount.yaml
+|		--- test-connection.yaml
+|
+---helm-charts
+	|
+	nginx
+	    |
+	    ---	charts
+	    |
+	    --- templates
+	    |		|
+	    |		--- tests dir
+	    |		--- deployment.yaml
+	    |		--- hpa.yaml
+	    |		--- httproute.yaml
+	    |		--- ingress.yaml
+	    |		--- NOTES.md
+	    |		--- service.yaml
+	    |		--- serviceaccount.yaml
+	    |
+	    --- application-1.yaml
+	    --- application-2.yaml
+	    --- Chat.yaml
+	    --- custom-values.yaml
+	    --- values.yaml
+
+
+Push the added manifests to our git repository
+	terminal --> git add .
+	terminal --> git commit -m "added directoryOfmanifests folder for application creation with directory tool"
+	terminal --> git push origin main
+
+
+
+Create the application with directory tool:
+-------------------------------------------
+
+1. Create application-3.yaml file
+
+application-3.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: application-directory                   # change the name of the application
+spec:
+  destination:
+    namespace: directory                        # change the namespace
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				
+  source:
+    path: argocd-application/directoryOfmanifests		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs		# path to the argocd lab repo
+    targetRevision: main
+-----------------------------------------------
+
+2. Create directory namespace
+	terminal --> k create ns directory		# result: namespace/directory created
+
+3. Apply application-3.yaml file
+	terminal --> k apply -f application-3.yaml	# result: application.argoproj.io/application-directory created
+
+In the ArgoCD UI we can find the new application
+
+4. Sync the app
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+
+
+
+
+
+Exclude specific manifest from the application-directory for safety reasons
+---------------------------------------------------------------------------
+
+Modify application-3.yaml file to exclude specific manifest. 
+
+!!! All other resources will remain working but the resource we specify !!!
+
+
+application-3.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: application-directory                   # change the name of the application
+spec:
+  destination:
+    namespace: directory                        # change the namespace
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				
+  source:
+    directory:                                        # use directory tool
+      exclude: "serviceaccount.yml"                   # set the name of the specific file
+    path: argocd-application/directoryOfmanifests		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
+    targetRevision: main
+-----------------------------------------------
+
+Apply application-3.yaml file
+	terminal --> k apply -f application-3.yaml	
+
+	# result: application.argoproj.io/application-directory configured
+
+In ArgoCD UI we can see that the app is out of sync and the service-account resource has a "trash" icon on it. This mean that the resource will be deleted from Kubernetes cluster if the PRUNE option is enabled.
+
+
+Sync the changes with "Prune" option
+	- Click "SYNC" button
+		- Check "PRUNE" checkbox on the first checkbox line
+	- Click "SYNCHRONIZE" button
+
+	# Prune option will remove the resource we want to be excluded
+	# If the resource didn't dissapear, delete it manually. We are not allowed for safety reasons. The resource is important.
+
+
+
+
+
+
+
+Include specific manifest from the application-directory for safety reasons
+---------------------------------------------------------------------------
+
+Modify application-3.yaml file to include specific manifest
+
+!!! All other resources will be removed but the resources we specify to be included !!!
+
+In this case we will deploy only serviceaccount.yml and service.yml resources:
+
+application-3.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: application-directory                   # change the name of the application
+spec:
+  destination:
+    namespace: directory                        # change the namespace
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				
+  source:
+    directory:                                        # use directory tool
+      include: "{serviceaccount.yml,service.yml}"               # set the name of the specific files
+    path: argocd-application/directoryOfmanifests		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
+    targetRevision: main
+-----------------------------------------------
+
+
+Apply application-3.yaml file
+	terminal --> k apply -f application-3.yaml	
+
+	# result: application.argoproj.io/application-directory configured
+
+In ArgoCD UI we can see that the application is out of sync. "Trash" icons are present on all resources we will remove. We will use PRUNE option to sync the application.
+
+Sync the changes with "Prune" option
+	- Click "SYNC" button
+		- Check "PRUNE" checkbox on the first checkbox line
+	- Click "SYNCHRONIZE" button
+
+	# Prune option will remove the resource we want to be excluded
+
+
+
+
+
+Recurse specific manifest from the application-directory for safety reasons
+---------------------------------------------------------------------------
+
+Modify application-3.yaml file to use "recurse" parameter and detect all sub directories in the main directory. All manifests will be deployed regardless if they are in the main or sub dir of the application.
+
+In this case we will deploy only serviceaccount.yml and service.yml resources:
+
+application-3.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: application-directory                   # change the name of the application
+spec:
+  destination:
+    namespace: directory                        # change the namespace
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				
+  source:
+    # directory:                                        # use directory tool
+      # recurse: true                                   # enable recurse
+    path: argocd-application/directoryOfmanifests		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
+    targetRevision: main
+-----------------------------------------------
+
+
+Apply application-3.yaml file to deploy the application with all resources
+	terminal --> k apply -f application-3.yaml	
+
+	# result: application.argoproj.io/application-directory configured
+
+In ArgoCD UI we can see that the application is out of sync. Confirm that all resources are deployed.
+
+
+Then uncomment the 2 lines in the "source" section to enable recurse option and detect any sub directories.
+
+application-3.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: application-directory                   # change the name of the application
+spec:
+  destination:
+    namespace: directory                        # change the namespace
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				
+  source:
+    directory:                                        # use directory tool
+      recurse: true                                   # enable recurse
+    path: argocd-application/directoryOfmanifests		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
+    targetRevision: main
+-----------------------------------------------
+
+We already have a sub directory with service named "nginx-sub-directory".
+
+Apply the application-3.yaml again
+	terminal --> k apply -f application-3.yaml	
+
+	# result: application.argoproj.io/application-directory configured
+
+Sync the changes
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+
+We will practice the Application handling on https://killercoda.com/mabusaa/course/argocd-endusers-scenarios, from "03. Creating ArgoCD Application Declaratively" to "07. Directory of Files Options"
+
+
+
+
+CREATE ARGOC APPLICATION WITH TERRAFORM
+=======================================
+
+Download and install terraform in C:\Program Files\terraform - https://developer.hashicorp.com/terraform/install#windows
+Copy the path of the terraform installation folder, usually - C:\Program Files\terraform
+Add path to Environment variables in windows
+	- go to "View advanced system settings" by searching for it or through the Control Panel
+	- You should see the "System Properties" window and click on [Environment Variables]:
+	- Next, click on the "Path" variable and on the [Edit] button:
+	- Then you should press the [New] button and add the path (C:\Program Files\terraform) to where the terraform.exe file is:
+	- Click consecutively on [OK] buttons to exit all settings. 
+
+Open terminal and verify terraform installation
+	terminal --> terraform -version
+
+! If terraform is still not recognized, restart the PC and verify installation again with terminal --> terraform -v
+
+
+Copy the directory "argocd-tutorial\v03-argocd-applications\application-using-terraform" from repository https://github.com/devopshobbies/argocd-tutorial and paset it in our ArgoCD Lab project structure
+
+Now our project directory looks like this 
+
+ArgoCD Labs
+|	|
+|	--- .gitignore
+|
+argocd-application
+|
+--- application-using-terraform
+|			|
+|			|
+|			--- main.tf
+|			--- providers.tf
+|			--- variables.tf
+|			--- terraform.tfvars		# added in .gitignore
+|
+--- directoryOfmanifests dir
+--- helm-charts dir
+--- application-directory.yaml
+--- application-helm.yaml
+
+
+This is the ArgoCD provider in terraform - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs
+	- We can expand resources drop down menu to see all resources we can create
+
+To use specific provider we click on "Use this provider" and copy the top part of the configuration and set it in main.tf file.
+
+main.tf
+-----------------------------------------------
+terraform {
+  required_providers {
+    argocd = {
+      source  = "argoproj-labs/argocd"			# this is the provider
+      version = "7.12.4"
+    }
+  }
+}
+
+provider "argocd" {
+  server_addr = var.server_addr
+  username    = var.username
+  password    = var.password
+  insecure    = var.insecure
+}
+-----------------------------------------------
+
+
+
+We can use different terraform application builders - Helm, Kustomize or multiple builders
+	- https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs/resources/application
+
+In this example we will use Helm so we copy the Helm application configuration and set the variables names for all variables in the main.tf file
+
+main.tf
+-----------------------------------------------
+resource "argocd_application" "helm" {
+  metadata {
+    name      = "helm-app-using-terraform"		# we leave only application name
+    namespace = var.namespace
+    labels = {
+      test = "true"
+    }
+  }
+
+  spec {
+    destination {
+      server    = var.destination_server
+      namespace = var.destination_namespace
+    }
+
+    source {
+      repo_url        = var.repo_url
+      path            = var.path
+      target_revision = var.target_revision
+      helm {
+        value_files = var.values_files
+      }
+    }
+  }
+}
+-----------------------------------------------
+
+
+In the variables.tf we set all details for ArgoCD connection
+
+variables.tf
+-----------------------------------------------
+variable "username" {
+  type        = string
+  description = "Username Value"	
+}
+
+variable "password" {
+  type        = string
+  description = "Password Value"
+}
+
+variable "namespace" {
+  type        = string
+  description = "Namespace Value"
+}
+
+variable "destination_namespace" {
+  type        = string
+  description = "Destination Namespace Value"
+}
+
+variable "destination_server" {
+  type        = string
+  description = "Destination Server Value"
+}
+
+variable "server_addr" {
+  type        = string
+  description = "server_addr Value"
+}
+
+variable "repo_url" {
+  type        = string
+  description = "Repo_url Value"
+}
+
+variable "path" {
+  type        = string
+  description = "Path Value"
+}
+
+variable "target_revision" {
+  type        = string
+  description = "Target_revision Value"
+}
+
+variable "values_files" {
+  type        = list(string)
+  description = "Values_files Value as a list"
+}
+
+variable "insecure" {
+  type        = bool
+  description = "insecure Value as a boolean"
+}
+-----------------------------------------------
+
+
+
+We create a terraform.tfvars and set all values as types set in variables.tf file and used in the main.tf file.
+
+### CHANGE ALL MARKED VALUES TO USE THE CONFIGURATION ###
+
+terraform.tfvars
+-----------------------------------------------
+username              = "admin"				
+password              = "password"				# set the real value
+server_addr           = "localhost:32074"			# connection host and port
+namespace             = "argocd"				# namespace in the cluster
+destination_server    = "https://kubernetes.default.svc"			# default server
+repo_url              = "https://github.com/entermix123/ArgoCD-Labs.git"	# repository url
+path                  = "argocd-application/helm-charts/nginx"			# application directory
+target_revision       = "main"							# can be branch, tag_name or commit_id
+values_files          = ["custom-values.yaml"]	# we will use external file custom_values.yaml to set replicaCount to 4
+destination_namespace = "terraform1"		# target namespace
+insecure              = true			# skip TLS communication - ignore certificates only for this demo
+-----------------------------------------------
+
+### Include terraform.tfvars to .gitignore file to prevent exposing secrets in the repository !!!
+
+
+Format files with terraform
+	terminal --> terraform fmt
+
+Install terraform proider
+	terminal --> terrafomr init	
+
+	# result: Terraform has been successfully initialized!
+
+Validate terraform files
+	terminal --> terraform validate
+
+	# result: Success! The configuration is valid.
+
+Plan apllication deployment
+	terminal --> terraform plan
+
+Apply terraform configured resources
+	terminal --> terraform apply
+	terminal --> yes
+
+	# result:
+	argocd_application.helm: Creating...
+	argocd_application.helm: Creation complete after 7s [id=helm-app-using-terraform:argocd]
+
+	Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+
+Create "terraform" namespace
+	terminal --> k create ns terraform		# result: namespace/terraform created
+
+In ArgoCD UI open the application Sync the changes
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+
+
+
+
+
+
+Practice the Application handling on https://killercoda.com/mabusaa/course/argocd-endusers-scenarios, from "03. Creating ArgoCD Application Declaratively" to "07. Directory of Files Options"
+
+
+03. Creating Argo CD Application Declaratively
+----------------------------------------------
+
+Practice creating application using declarative approach , in this practice we will cover:
+
+    Declare Argo CD application using Yaml.
+    Create the application using kubectl.
+    Sync the application and verify resources are created in cluster.
+
+
+START
+
+
+TASK 1:
+Create an Argo CD application declaratively using Yaml with below specs and apply it using kubectl:
+
+You can use the definition file /practice/application.yaml
+
+    Name: guestbook
+    Destination cluster url (local cluster): https://kubernetes.default.svc
+    Destination namespace: guestbook
+    Source repo: https://github.com/mabusaa/argocd-example-apps.git , or you can fork the repo and set your repo url.
+    Source path: guestbook , (path of manifests where it include k8s service and deployment files).
+    Source branch: master
+
+Create the application using kubectl
+	terminal --> kubectl apply -f /practice/application.yaml
+
+Verify application is created
+	terminal --> kubectl get application -n argocd
+
+
+
+Solution:
+---------
+
+Print the application template
+	terminal --> cat /practice/application.yaml
+
+# result:
+
+application.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: 
+  namespace: argocd
+spec: 
+  destination: 
+    namespace: 
+    server: ""
+  project: default
+  source: 
+    path: 
+    repoURL: ""
+    targetRevision: 
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+-----------------------------------------------
+
+
+
+Edit the template and set the configuration below:
+	terminal --> vi /practice/application.yaml
+
+application.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: guestbook
+  namespace: argocd
+spec: 
+  destination: 
+    namespace: guestbook
+    server: "https://kubernetes.default.svc"
+  project: default
+  source: 
+    path: guestbook
+    repoURL: "https://github.com/mabusaa/argocd-example-apps.git"
+    targetRevision: master
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+
+Create the application using kubectl
+	terminal --> kubectl apply -f /practice/application.yaml	# result: application.argoproj.io/guestbook created
+
+Verify application is created
+	terminal --> kubectl get application -n argocd
+
+	# result:
+	NAME        SYNC STATUS   HEALTH STATUS
+	guestbook   OutOfSync     Missing
+
+
+
+
+TASK 2:
+Open Argo CD web and sync the application
+
+You need admin user password to login in web.
+	terminal --> kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+
+	# result: password
+
+Then click on below link to open web UI.
+
+ACCESS ARGO CD
+
+Sync the application to create the resources in destination cluster.
+	- Open the App
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+
+
+
+
+
+
+04. Creating Argo CD Application using Web UI
+---------------------------------------------
+
+Practice creating application using Web UI , in this practice we will cover:
+
+    Create the application using Web UI form.
+    Sync the application and verify resources are created in cluster.
+
+
+START
+
+Open Argo CD Web UI 
+
+You need admin user password to login in web.
+	terminal --> kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+
+	# result: password 
+
+Then click on below link to open web UI.
+
+ACCESS ARGO CD
+
+Create an Argo CD application using Web UI by clicking (New App), use below specs:
+
+    Name: app-1
+    project: default
+    Sync options: Select auto create namespace.
+    Source repo: https://github.com/mabusaa/argocd-example-apps.git , or you can fork the repo and set your repo url.
+    Source path: guestbook , (path of manifests where it include k8s service and deployment files).
+    Source branch: master
+    Destination cluster url (local cluster): https://kubernetes.default.svc
+    Destination namespace: app-1
+
+Sync the application to create the resources in destination cluster.
+
+
+CHECK
+
+
+
+
+
+
+
+
+05. Creating Argo CD Application using CLI
+------------------------------------------
+
+Practice creating application using CLI , in this practice we will cover:
+
+    Login to Argo CD CLI.
+    Create the application using CLI.
+    Sync the application and verify resources are created in cluster.
+
+START
+
+
+We already Installed Argo CD CLI and logged in to CLI using admin account. you can start using CLI
+
+Create an Argo CD application using CLI, use below specs:
+
+    Name: app-2
+    project: default
+    Sync options: set create namespace to true.
+    Source repo: https://github.com/mabusaa/argocd-example-apps.git , or you can fork the repo and set your repo url.
+    Source path: guestbook
+    Source branch: master
+    Destination cluster url (local cluster): https://kubernetes.default.svc
+    Destination namespace: app-2
+
+You have to use argocd app create command
+
+
+Solution
+--------
+
+Create application "app-2" covering all requirements above:
+	terminal --> argocd app create app-2 --repo https://github.com/mabusaa/argocd-example-apps.git --revision master --path guestbook --dest-server https://kubernetes.default.svc --dest-namespace app-2 --sync-option CreateNamespace=true --grpc-web
+
+
+Verify app is created
+	terminal --> argocd app list --grpc-web
+
+# result:
+
+NAME   CLUSTER                         NAMESPACE  PROJECT  STATUS     HEALTH   SYNCPOLICY  CONDITIONS  REPO                                                PATH       TARGET
+app-2  https://kubernetes.default.svc  app-2      default  OutOfSync  Missing  <none>      <none>      https://github.com/mabusaa/argocd-example-apps.git  guestbook  master
+
+
+Sync the application to create the resources in destination cluster.
+	terminal --> argocd app sync app-2 --grpc-web
+
+Verify app is synced
+	terminal --> argocd app list --grpc-web
+
+# result:
+NAME   CLUSTER                         NAMESPACE  PROJECT  STATUS  HEALTH       SYNCPOLICY  CONDITIONS  REPO                                                PATH       TARGET
+app-2  https://kubernetes.default.svc  app-2      default  Synced  Progressing  <none>      <none>      https://github.com/mabusaa/argocd-example-apps.git  guestbook  master
+
+
+
+
+
+
+06. Helm Options
+----------------
+
+Practice creating application that deploy a helm chart that exist in a git repo , in this practice we will cover:
+
+    Declare an Argo CD application declaratively that deploy a helm chart.
+    Create the application using kubectl.
+    Sync the application and verify resources are created in cluster.
+    Update the helm release name in Argo CD application definition.
+    Re-sync the app and prune the old resources.
+
+START
+
+TASK 1:
+-------
+Create Argo CD Application
+
+
+Create an Argo CD application declaratively with below specs and apply it using kubectl:
+
+You can use the definition file /practice/application.yaml
+
+    Name: helm-app
+    Destination cluster url (local cluster): https://kubernetes.default.svc
+    Destination namespace: helm-app
+    Source repo: https://github.com/mabusaa/argocd-example-apps.git , or you can fork the repo and set your repo url.
+    Source path: helm-guestbook , (this is the helm chart path in git repo)
+    Source branch: master
+
+
+Print the given template
+	terminak --> cat /practice/application.yaml
+
+
+application.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: 
+  namespace: argocd
+spec: 
+  destination: 
+    namespace: 
+    server: ""
+  project: default
+  source: 
+    path: 
+    repoURL: ""
+    targetRevision: 
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+-----------------------------------------------
+
+
+Edit the template covering all requirement above
+	terminal --> vi /practice/application.yaml
+
+
+application.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: helm-app
+  namespace: argocd
+spec: 
+  destination: 
+    namespace: helm-app
+    server: "https://kubernetes.default.svc"
+  project: default
+  source: 
+    path: helm-guestbook
+    repoURL: "https://github.com/mabusaa/argocd-example-apps.git"
+    targetRevision: master
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+
+
+Create the application using kubectl
+	terminal --> kubectl apply -f /practice/application.yaml	
+	
+	# result: application.argoproj.io/helm-app created
+
+
+Verify application is created
+	terminal --> kubectl get application -n argocd
+
+# result:
+NAME       SYNC STATUS   HEALTH STATUS
+helm-app   OutOfSync     Missing
+
+
+CHECK
+
+
+TASK 2:
+-------
+
+Sync Application
+
+You need admin user password to login in web.
+	terminal --> kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+
+Then click on below link to open web UI, and login by admin user.
+
+ACCESS ARGO CD
+
+Sync the application to create the resources in destination cluster.
+
+
+Sync the application to create the resources in destination cluster.
+	- Open the App
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+    Note: by default in Argo CD, helm release name is equal to app name unless we specify it explicitly. 
+
+CHECK
+
+
+TASK 3:
+-------
+
+Update helm release name
+
+Update helm release name with value of my-release in Argo CD application definition file /practice/application.yaml
+
+Edit the application manifest file and set the required release
+	terminal --> vi /practice/application.yaml
+
+
+application.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: helm-app
+  namespace: argocd
+spec: 
+  destination: 
+    namespace: helm-app
+    server: "https://kubernetes.default.svc"
+  project: default
+  source: 
+    path: helm-guestbook
+    repoURL: "https://github.com/mabusaa/argocd-example-apps.git"
+    targetRevision: master
+    helm:
+     releaseName: my-release
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+
+Update the application using kubectl
+	terminal --> kubectl apply -f /practice/application.yaml
+
+	# result: application.argoproj.io/helm-app configured
+
+Verify the application is out of sync again
+	terminal --> kubectl get application -n argocd
+
+# result:
+NAME       SYNC STATUS   HEALTH STATUS
+helm-app   OutOfSync     Missing
+
+CHECK
+
+
+
+TASK 4:
+-------
+
+Re-sync the application
+
+Click on below link to open web UI.
+
+ACCESS ARGO CD
+
+Re-Sync the application and select (prune) option to delete old resources (with old names).
+
+Sync the application to create the resources in destination cluster.
+	- Open the App
+	- Click "SYNC" button
+	- Check "PRUNE" checkbox
+	- Click "SYNCHRONIZE" button
+
+Note: Argo CD re-created the resources and use the new release name, so old resources is no more required and need to be pruned. 
+
+CHECK
+
+
+
+
+
+07. Directory of Files Options
+------------------------------
+
+Practice creating application that deploy a directory of Yaml files that exist in a git repo , in this practice we will cover:
+
+    Declare an Argo CD application declaratively that deploy a directory of Yaml files.
+    Create the application using kubectl.
+    Sync the application and verify resources are created in cluster.
+    Update Argo CD application definition to include all files in all sub-directories using recursive option.
+    Re-sync the app.
+
+START
+
+
+TASK 1:
+-------
+
+Create Argo CD Application
+
+Create an Argo CD application declaratively with below specs and apply it using kubectl:
+
+You can use the definition file /practice/application.yaml
+
+    Name: directory-app
+    Destination cluster url (local cluster): https://kubernetes.default.svc
+    Destination namespace: directory-app
+    Source repo: https://github.com/mabusaa/argocd-example-apps.git , or you can fork the repo and set your repo url.
+    Source path: guestbook-with-sub-directories , (this path includes k8s manifests in root directory and in sub-directory)
+    Source branch: master
+
+
+
+Print the given template
+	terminak --> cat /practice/application.yaml
+
+application.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: 
+  namespace: argocd
+spec: 
+  destination: 
+    namespace: 
+    server: ""
+  project: default
+  source: 
+    path: 
+    repoURL: ""
+    targetRevision: 
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+-----------------------------------------------
+
+
+Edit the template covering all requirement above
+	terminal --> vi /practice/application.yaml
+
+
+application.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: directory-app
+  namespace: argocd
+spec: 
+  destination:
+    namespace: directory-app
+    server: "https://kubernetes.default.svc"
+  project: default
+  source: 
+    path: guestbook-with-sub-directories
+    repoURL: "https://github.com/mabusaa/argocd-example-apps.git"
+    targetRevision: master
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+
+
+Create the application using kubectl
+	terminal --> kubectl apply -f /practice/application.yaml
+	
+	# result: application.argoproj.io/directory-app created
+
+
+Verify application is created
+	terminal --> kubectl get application -n argocd
+
+	# result: 
+	NAME            SYNC STATUS   HEALTH STATUS
+	directory-app   OutOfSync     Missing
+
+CHECK
+
+
+
+TASK 2:
+-------
+
+Sync Application
+
+
+
+Open Argo CD web and sync the application. 
+
+You need admin user password to login in web.
+	terminal --> kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+
+Then click on below link to open web UI, and login with admin user.
+
+ACCESS ARGO CD
+
+Sync the application to create the resources in destination cluster.
+
+Sync the application to create the resources in destination cluster.
+	- Open the App
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+    Note: still not all files in all sub-directories are synced and deployed. 
+
+CHECK
+
+
+
+
+TASK 3:
+-------
+
+Set recurse option
+
+Set recurse option in Argo CD application definition file /practice/application.yaml to include and deploy files in all sub-directories.
+
+
+Edit the application manifest file:
+	terminal --> vi /practice/application.yaml
+
+application.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: directory-app
+  namespace: argocd
+spec: 
+  destination:
+    namespace: directory-app
+    server: "https://kubernetes.default.svc"
+  project: default
+  source: 
+    path: guestbook-with-sub-directories
+    repoURL: "https://github.com/mabusaa/argocd-example-apps.git"
+    targetRevision: master
+    directory:
+      recurse: true
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+
+Update the application using kubectl
+	terminal --> kubectl apply -f /practice/application.yaml
+
+	# result: application.argoproj.io/directory-app configured
+
+Verify the application is out of sync again
+	terminal --> kubectl get application -n argocd
+
+	# result:
+	NAME            SYNC STATUS   HEALTH STATUS
+	directory-app   OutOfSync     Missing
+
+
+
+TASK 4:
+-------
+
+Re-sync the application
+
+Open Argo CD web and re-sync the application. 
+
+Click on below link to open web UI.
+
+ACCESS ARGO CD
+
+Re-Sync the application
+
+Sync the application to create the resources in destination cluster.
+	- Open the App
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+Note: resources in sub-directories are now also deployed. 
+
+CHECK
+
+
+
+
+
+
+
+
+
+
