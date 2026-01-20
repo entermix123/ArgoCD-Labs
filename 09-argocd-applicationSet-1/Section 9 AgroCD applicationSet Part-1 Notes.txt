@@ -1,0 +1,1113 @@
+Video link - https://www.youtube.com/watch?v=LoFazAmwWOw&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=9
+
+Video Agenda:
+
+00:00 ApplicationSet Overview
+00:05:12 List Generator
+00:17:52 Cluster Generator
+00:44:19 Git Generator: Directories
+00:54:22  Git Generator: File
+
+Video Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+
+Prerequisites
+=============
+
+We need to have 2 clusters added in ArgoCD server. ArgoCD is instlled on the 'local' cluster and we added one external cluster in section "08 - adding cluster & tracking strategies/Notes" and "ArgoCD Labs/08-argocd-add-cluster".
+
+
+1. Find and set context of the main cluster
+-------------------------------------------
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2			
+        *  	  kind-kind       kind-kind       kind-kind       argocd	# target context
+
+
+Set the context of the local cluster
+	terminal --> kubectl config use-context kind-kind
+
+
+2. Login to ArgoCD CLI:
+-----------------------
+
+Find the password of admin user of ArgoCD
+	powershell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+	# result: password
+
+
+Connect to the Node with ArgoCD CLI
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin --password Tip-kdHFNljqdnq3
+	or
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin
+	terminal --> password
+
+
+
+
+3. Set 'argocd' namespace as default namespace
+----------------------------------------------
+	terminal --> k config set-context --current --namespace=argocd	
+
+	# result: Context "kind-kind" modified.
+
+
+Check the current context
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2			
+        *  	  kind-kind       kind-kind       kind-kind       argocd	# target namespace
+
+
+
+
+ApplicationSet Overview
+=======================
+
+List pods in argocd namespace
+	terminal --> k get pods -n argocd
+
+	# result:
+	NAME                                                READY   STATUS    RESTARTS         AGE
+	argocd-application-controller-0                     1/1     Running   11 (4h13m ago)   11d
+	argocd-applicationset-controller-54d866c4f8-p8g82   1/1     Running   11 (4h13m ago)   11d	# target controller
+	argocd-dex-server-58f4494d88-7x85d                  1/1     Running   14 (4h13m ago)   11d
+	argocd-notifications-controller-84c4f974dd-cbm65    1/1     Running   11 (4h13m ago)   11d
+	argocd-redis-767d85d48f-wjqnk                       1/1     Running   11 (4h13m ago)   11d
+	argocd-repo-server-69457bbbdc-5vhqd                 1/1     Running   54 (4h13m ago)   11d
+	argocd-server-7b5cd9d568-bwc2s                      1/1     Running   14 (4h13m ago)   11d
+
+
+We have multiple ways to deploy a application in specific cluster. With application manifest or deployment manifest (deploy multiple pods) or with generators.
+
+
+
+List Generator
+==============
+
+List generators are responsible for generating parameters. Parameters are key-value pairs that are substituted into template, section of the Argo applicationset respurce during template rendering.
+
+We will go true 2 examples
+	- list-generator-ex1.yml
+	- list-generator-ex2.yml
+
+
+EXAMPLE 1
+---------
+
+The first example we are using list generator with 2 elemnt sections (two clusters - one internal and one external). This means that we will habe tow different applications. We use different variables such as {{path}}, {{cluster}} and {{url}}.
+
+list-generator-ex1.yml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet                      # specific manifest type
+metadata:
+  name: list-generator-ex1                # name of the manifest
+  namespace: argocd                       # namespace
+spec:
+  generators:                             # list of generators
+  - list:                                 # list generator                        
+      elements:                           # list of elements                
+      - cluster: local                          # local cluster name
+        url: https://kubernetes.default.svc             # local cluster url
+        path: directoryOfmanifests                      # local cluster path to application manifests
+      - cluster: external                               # external cluster name
+        url: https://cluster2-control-plane:6443        # external cluster url
+        path: helm-charts/nginx                         # external cluster path to application manifests            
+  template:                                # application template                  
+    metadata:
+      name: '{{cluster}}-application'     # name of the application is formed from the cluster's name (local and external)
+    spec:
+      project: default                    # project name
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs           # path to the argocd lab repo
+        targetRevision: main                 # use main branch as source version
+        path: argocd-application/{{path}}     # the path in the repo to the application manifests
+      destination:
+        server: '{{url}}'                     # url of the cluster
+        namespace: '{{cluster}}'              # destination namespace is formed from the cluster's name only
+      syncPolicy:                             # sync policy               
+        automated: {}                         # automated sync              
+        syncOptions:                          # sync options
+          - CreateNamespace=true              # automated namespace creation
+-----------------------------------------------
+
+Application template is created with interation over every cluster we specify in generators/list/elements section.
+
+Apply the applicationSet
+	terminal --> k apply -f list-generator-ex1.yml
+
+	# result: applicationset.argoproj.io/list-generator-ex1 created
+
+
+In ArgoCD UI we can see that we have 2 applications. One in each cluster.
+
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2			
+        *  	  kind-kind       kind-kind       kind-kind       argocd
+
+
+Change context to cluster 2
+	terminal --> kubectl config use-context kind-cluster2
+
+	# result: Switched to context "kind-cluster2"
+
+
+List nsmaespaces in cluster 2
+	terminal --> k get ns
+
+	# result:
+	NAME                 STATUS   AGE
+	argocd               Active   2d23h
+	default              Active   2d23h
+	external             Active   44h		# this is newly created namespace for the list generator application
+	kube-node-lease      Active   2d23h
+	kube-public          Active   2d23h
+	kube-system          Active   2d23h
+	local-path-storage   Active   2d23h
+	terraform            Active   2d23h
+
+
+
+Set the context of the local cluster
+	terminal --> kubectl config use-context kind-kind
+
+	# result: Switched to context "kind-kind"
+
+List nsmaespaces in local cluster 
+	terminal --> k get ns
+
+	# result:
+	NAME                 STATUS   AGE
+	argocd               Active   19d
+	efault               Active   19d
+	ingress-nginx        Active   19d
+	kube-node-lease      Active   19d
+	kube-public          Active   19d
+	kube-system          Active   19d
+	local                Active   44h		# this is the latest created namespace for the list generator application
+	local-path-storage   Active   19d
+
+Delte the applications created with list generator list-generator-ex1.yml
+	terminal --> kubectl delete applicationset list-generator-ex1 -n argocd
+
+	# result: applicationset.argoproj.io "list-generator-ex1" deleted from argocd namespace
+
+Delete namepsace "local" in the local cluster
+	terminal --> k delete ns local
+
+	# result: namespace "local" deleted
+
+Switch contex and delete the "external" namepsace from cluster 2
+	Switch context to cluster 2
+		terminal --> kubectl config use-context kind-cluster2
+
+		# result: Switched to context "kind-cluster2"
+
+	Delete "external" namespace
+		terminal --> k delete ns external
+
+		# result: namespace "external" deleted
+
+Switch contex to local cluster
+	terminal --> kubectl config use-context kind-kind
+
+	# result: Switched to context "kind-kind"
+
+
+
+
+EXAMPLE 2
+---------
+
+In the second example we wil name the cluster with names of the environments
+	- pre-staging
+	- staging
+
+list-generator-ex2.yml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet                      # specific manifest type    
+metadata:
+  name: list-generator-ex2                # name of the manifest
+  namespace: argocd                       # namespace of the manifest
+spec:
+  generators:                             # list of generators
+  - list:
+      elements:                           # list of elements (clusters)
+      - environment: pre-staging                  # environment 1 name
+        server: https://kubernetes.default.svc    # environment 1 url
+        path: directoryOfmanifests                # environment 1 path to application manifests
+      - environment: staging                          # environment 2 name
+        server: https://cluster2-control-plane:6443   # environment 2 url
+        path: helm-charts/nginx                       # environment 2 path to application manifests
+  template:                                # application template                     
+    metadata:                       
+      name: '{{environment}}-application'   # name of the application is formed from the environemant's name (cluster name)
+    spec:
+      project: default                      # project name            
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs           # path to the argocd lab repo
+        targetRevision: main                 # use main branch as source version              
+        path: argocd-application/{{path}}     # the path in the repo to the application manifests
+      destination:                            # destination cluster           
+        server: '{{server}}'                  # url of the cluster    
+        namespace: '{{environment}}'          # destination namespace is formed from the environemant's name only (cluster name)
+      syncPolicy:
+        automated: {}                         # automated sync
+        syncOptions:                          # sync options
+          - CreateNamespace=true              # automated namespace creation  
+-----------------------------------------------
+
+Apply the applicationSet
+	terminal --> k apply -f list-generator-ex2.yml
+
+	# result: applicationset.argoproj.io/list-generator-ex2 created
+
+
+In ArgoCD UI we can see that we have 2 applications. One in each cluster.
+
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2			
+        *  	  kind-kind       kind-kind       kind-kind       argocd
+
+
+Change context to cluster 2
+	terminal --> kubectl config use-context kind-cluster2
+
+	# result: Switched to context "kind-cluster2"
+
+
+List nsmaespaces in cluster 2
+	terminal --> k get ns
+
+	# result:
+	NAME                 STATUS   AGE
+	argocd               Active   3d
+	default              Active   3d
+	kube-node-lease      Active   3d
+	kube-public          Active   3d
+	kube-system          Active   3d
+	local-path-storage   Active   3d
+	staging              Active   26m	# this is the newest namespace created in cluster 2
+
+
+Set the context of the local cluster
+	terminal --> kubectl config use-context kind-kind
+
+	# result: Switched to context "kind-kind"
+
+List nsmaespaces in local cluster 
+	terminal --> k get ns
+
+	# result:
+	NAME                 STATUS   AGE
+	argocd               Active   20d
+	default              Active   20d
+	ingress-nginx        Active   20d
+	kube-node-lease      Active   20d
+	kube-public          Active   20d
+	kube-system          Active   20d
+	local-path-storage   Active   20d
+	pre-staging          Active   25m		# this is the newest created namespace in local cluster
+
+Delte the applications created with list generator list-generator-ex2.yml
+	terminal --> k delete applicationset list-generator-ex2 -n argocd
+
+	# result: applicationset.argoproj.io "list-generator-ex2" deleted from argocd namespace
+
+Delete namepsace "pre-staging" in the local cluster
+	terminal --> k delete ns pre-staging
+
+	# result: namespace "pre-staging" deleted
+
+Switch contex and delete the "external" namepsace from cluster 2
+	Switch context to cluster 2
+		terminal --> k config use-context kind-cluster2
+
+		# result: Switched to context "kind-cluster2"
+
+	Delete "external" namespace
+		terminal --> k delete ns staging
+
+		# result: namespace "staging" deleted
+
+Switch contex to local cluster
+	terminal --> kubectl config use-context kind-kind
+
+	# result: Switched to context "kind-kind"
+
+
+
+
+
+Cluster Generator
+=================
+
+Cluster generator allows us to target ArgoCD applications to clusters based on the labels of the clusters defined within it and managed by ArgoCD. ArgoCD manages clusters by using secrets saved in "argocd" namespace. However we added the second cluster with terraform or with manually managed manifest files (section 8 from this course - manual - sa, role, rolebinding, cluster-secret or argocd_manager_secret with terraform), application sets controller uses these secrets to generate parameters to identify target available clusters. For each cluster registered in ArgoCD the cluster generator produces parameters based on the labels of items found within the cluster secret.
+
+The cluster generator will provide different parameters that we can use in ApplicationSet maifest related to cluster generator as follow:
+	- name 
+	- namenormalized	# contains only lowercase alphanumeric characters and convert underline to dash (Test_A = test-a)
+	- server		# the address of the cluster
+	- metadata.labels.<key>		# for each label in the secret
+	- metadata.annotations.<key>	# for each annotation in the secret
+
+
+We will go over 4 examples for cluster generators
+	- cluster-generator-ex1.yaml
+	- cluster-generator-ex2.yaml
+	- cluster-generator-ex3.yaml
+	- cluster-generator-ex4.yaml
+
+
+Check the current context
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2			
+        *  	  kind-kind       kind-kind       kind-kind       argocd	# target namespace
+
+
+Switch contex to local cluster if not selected
+	terminal --> kubectl config use-context kind-kind
+
+	# result: Switched to context "kind-kind"
+
+
+List clusters
+	terminal --> argocd cluster list
+
+	# result:
+SERVER                               NAME                                 VERSION  STATUS      MESSAGE  PROJECT
+https://cluster2-control-plane:6443  https://cluster2-control-plane:6443  1.34     Successful
+https://kubernetes.default.svc       in-cluster                           1.34     Successful
+
+Rename cluster 2 to 'external'
+	terminal --> argocd cluster set https://cluster2-control-plane:6443 --name external
+
+Confirm the cluster is renamed
+	terminal --> argocd cluster list
+
+	# result:
+SERVER                               NAME        VERSION  STATUS      MESSAGE  PROJECT
+https://cluster2-control-plane:6443  external    1.34     Successful			# renamed cluster
+https://kubernetes.default.svc       in-cluster  1.34     Successful
+
+
+
+EXAMPLE 1 - deploy applications on all cluster
+---------
+
+This generator create application for each cluster connected to ArgoCD.
+
+
+cluster-generator-ex1.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet                      # specific manifest type
+metadata:
+  name: cluster-generator-ex1             # name of the manifest
+  namespace: argocd                       # namespace of the manifest
+spec:
+  generators:
+  - clusters: {}                           # empty cluster generator block
+  template:
+    metadata:
+      name: '{{name}}-application'         # name of the application based on cluster's name
+    spec:
+      project: "default"                   # project name
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs           # path to the argocd lab repo
+        targetRevision: main                                          # use main branch as source version                  
+        path: argocd-application/helm-charts/nginx                    # the path in the repo to the application manifests
+      destination:
+        server: '{{server}}'                                          # url of the cluster
+        namespace: cluster-generator                                  # destination namespace                  
+      syncPolicy:
+        automated: {}                                                 # automated sync
+        syncOptions:
+          - CreateNamespace=true                                      # automated namespace creation
+-----------------------------------------------
+
+Apply the cluster generator
+	terminal --> k apply -f cluster-generator-ex1.yaml
+
+	# result: applicationset.argoproj.io/cluster-generator-ex1 created
+
+We can check in ArgoCD UI that we hve created 2 applications with names
+	- in-cluster-application		# in the local cluster
+	- external-application			# in the external cluster
+
+Delete applications created with example 1
+	terminal --> k delete -f cluster-generator-ex1.yaml
+
+	# result: applicationset.argoproj.io "cluster-generator-ex1" deleted from argocd namespace
+
+We will use the namespace 'cluster-generator' in the next examples, so don't delete it.
+
+
+
+EXAMPLE 2.1 - deploy applications on specific cluster using cluster labels filtering
+-----------
+
+We will deploy different applications in specific clusters using selectors (configuring labels). 
+
+Add to the external "cluster2" cluster a label "environment=staging" with ArgoCD IO/Settings/Clusters/external/Edit/Labels menu.
+
+Under "matchLabels" section we specify 2 kinds of labels. The first one is common for external clusters connected to ArgoCD, because we connect clusters with secrets type 'cluster'. The second label is specific and it should already been added to the cluster (previous step). The generator will deploy applications only to cluster that have both labels matched. This means that our local cluster will not be selected for deployment because its missing both labels.
+
+
+cluster-generator-ex2-1.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cluster-generator-ex2-1
+  namespace: argocd
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchLabels:                                    # match cluster labels
+          argocd.argoproj.io/secret-type: cluster       # secret type label, must be cluster and it not common for local cluster
+          environment: staging                          # cluster environment label
+  template:
+    metadata:
+      name: '{{name}}-application'
+    spec:
+      project: "default"
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs
+        targetRevision: main
+        path: argocd-application/helm-charts/nginx
+      destination:
+        server: '{{server}}'
+        namespace: cluster-generator
+      syncPolicy:
+        automated: {}                                   # automated sync
+        syncOptions:
+          - CreateNamespace=true                        # automated namespace creation
+-----------------------------------------------
+
+Appy the generator manifest
+	terminal --> k apply -f cluster-generator-ex2-1.yaml
+
+	# result: applicationset.argoproj.io/cluster-generator-ex2-1 created
+
+We can check in ArgoCD UI that we hve created only one application named external-application on the external cluster. 
+We can confirm that on the local cluster we have no resources in the 'cluster-generator' namespace
+	terminal --> k get all -n cluster-generator
+	
+	# result: No resources found in cluster-generator namespace.
+
+Delete applications created with example 2.1
+	terminal --> k delete -f cluster-generator-ex2-1.yaml
+
+	# result: applicationset.argoproj.io "cluster-generator-ex2-1" deleted from argocd namespace
+
+
+
+
+EXAMPLE 2.2 - deploy applications on local cluster using label matching
+-----------
+
+To deploy application on the local cluster using labels we need to create secret matching the matching label filter using ArgoCD UI or CLI. This way we can set labels to the local cluster.
+
+Create local cluster secret:
+
+local-secret.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: local
+  labels:
+    argocd.argoproj.io/auto-label-cluster-info: "true"  # auto label the local cluster with kubernetes cluster version
+    argocd.argoproj.io/secret-type: cluster		# set secret label type cluster
+    environment: pre-staging				# set environment label
+type: Opaque
+stringData:
+  name: local                                # name of the local cluster - will be renamed automatically to this one if different
+  server: https://kubernetes.default.svc		# set local cluster address
+  config: |
+    {
+      "tlsClientConfig": {
+        "insecure": false
+      }
+    }
+-----------------------------------------------
+
+!!! The local cluster will be autolabeled with the kuberletes cluster version. !!!
+
+Create the secret in the cluster
+	terminal --> k apply -f local-secret.yaml
+
+	# result: secret/local created
+
+Confirm that local cluster is renamed
+	terminal --> argocd cluster list
+
+	# result:
+	SERVER                               NAME      VERSION  STATUS      MESSAGE  PROJECT
+	https://cluster2-control-plane:6443  external  1.34     Successful
+	https://kubernetes.default.svc       local     1.34     Successful 			# renamed
+	
+	# the local sluter is renamed from 'in-cluster' to 'local'
+
+
+
+Create the generator file:
+
+cluster-generator-ex2-2.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cluster-generator-ex2-2
+  namespace: argocd
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchLabels:                                    # match cluster labels
+          argocd.argoproj.io/secret-type: cluster       # secret type label, must be cluster and it not common for local cluster
+          # environment: pre-staging                    # if we want to deploy the application only in the local cluster
+  template:
+    metadata:
+      name: '{{name}}-application'
+    spec:
+      project: "default"
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs
+        targetRevision: main
+        path: argocd-application/helm-charts/nginx
+      destination:
+        server: '{{server}}'
+        namespace: cluster-generator
+      syncPolicy:
+        automated: {}                                   # automated sync
+        syncOptions:
+          - CreateNamespace=true                        # automated namespace creation
+-----------------------------------------------
+
+Appy the generator manifest
+	terminal --> k apply -f cluster-generator-ex2-2.yaml
+
+	# result: applicationset.argoproj.io/cluster-generator-ex2-2 created
+
+We can check in ArgoCD UI that we hve created two application named external-application and local-application on both external and local cluster. 
+
+The labels for the local cluster are set in the secret manifest file local-secret.yaml we created earlier.
+
+If we want to deploy the application only on the local cluster we need to use only the second label filter - unique to local cluster only. 
+-----------------------------------------------
+...
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchLabels:                                    # match cluster labels
+          # argocd.argoproj.io/secret-type: cluster     # secret type label set in the local-secret.yaml for local clusters
+          environment: pre-staging                      # if we want to deploy the application only in the local cluster
+...
+-----------------------------------------------
+
+Delete applications created with example 2.2
+	terminal --> k delete -f cluster-generator-ex2-2.yaml
+
+	# result: applicationset.argoproj.io "cluster-generator-ex2-2" deleted from argocd namespace
+
+
+
+
+
+EXAMPLE 3 - deploy different applications to different cluster using labels
+---------
+
+We will deploy different applications to different cluster using clusters labels. All labels must be set before applying the generator manifest file.
+
+cluster-generator-ex3.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cluster-generator-ex3
+  namespace: argocd
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchLabels:
+          environment: staging                  # select cluster with label - external cluster
+      values:                                   # values section
+        path: helm-charts/nginx                 # path to the app
+        namespace: staging-ns                   # set new namespace for the specific app
+  - clusters:
+      selector:
+        matchLabels:
+          environment: pre-staging              # select cluster with label - local cluster
+      values:                                   # values section
+        path: directoryOfmanifests              # path to the app
+        namespace: pre-staging-ns               # set new namespace for the specific app
+  template:
+    metadata:
+      name: '{{name}}-application'
+    spec:
+      project: "default"
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs
+        targetRevision: main
+        path: argocd-application/{{values.path}}
+      destination:
+        server: '{{server}}'
+        namespace: '{{values.namespace}}'      # use different value (namespace name) for each cluster
+      syncPolicy:
+        automated: {}
+        syncOptions:
+          - CreateNamespace=true
+-----------------------------------------------
+
+Appy the generator manifest
+	terminal --> k apply -f cluster-generator-ex3.yaml
+
+	# result: applicationset.argoproj.io/cluster-generator-ex3 created
+
+We can see in ArgoCD UI that two applications are deployed, each on different cluster and different namespace.
+
+
+Delete the deployed applications
+	terminal --> k delete -f cluster-generator-ex3.yaml
+
+	# result: applicationset.argoproj.io "cluster-generator-ex3" deleted from argocd namespace
+
+
+Delete namespaces on each cluster to keep the clusters fresh and clean
+	Delete namespaces on Local Cluster 
+		- cluster-generator
+		- pre-staging-ns 
+	Delete namespaces on External Cluster
+		- cluster-generator
+		- staging-ns
+
+
+
+
+
+EXAMPLE 4 - deploy applications on clusters with Kubernetes cluster version labels set in the cluster secret in EXAMPLE 2
+---------
+
+We use deploy applications on clusters with specific version as follow:
+
+
+cluster-generator-ex4.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cluster-generator
+  namespace: argocd
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchExpressions:
+          - key: argocd.argoproj.io/kubernetes-version 
+          # the label argocd.argoproj.io/auto-label-cluster-info needs to be set to true on the cluster secret.
+            operator: In		# set operator to match the versions in the values below
+            values:			# set the Kubernetes cluster versions list
+              - "1.30"			
+              - "1.34"
+  template:
+    metadata:
+      name: '{{name}}-application'
+    spec:
+      project: "default"
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs
+        targetRevision: main
+        path: argocd-application/helm-charts/nginx
+      destination:
+        server: '{{server}}'
+        namespace: prod
+      syncPolicy:
+        automated: {}
+        syncOptions:
+          - CreateNamespace=true
+-----------------------------------------------
+
+
+Apply the generator manifest
+	terminal --> k apply -f cluster-generator-ex4.yaml
+
+	# result: applicationset.argoproj.io/cluster-generator created
+
+We can se ein the ArgoCD UI that only one application is deployed on the local cluster that is labeled with the kubernetes cluster version in the local-secret.yaml from EXAMPLE 2.
+
+Delete the application
+	terminal --> k delete -f cluster-generator-ex4.yaml
+
+	# result: applicationset.argoproj.io "cluster-generator" deleted from argocd namespace
+
+Delete 'prod' namespace from local cluster to keep the cluster clean and fresh
+	terminal --> k delete ns prod
+
+	# result: namespace "prod" deleted
+
+
+
+
+
+
+
+Git Generator: Directories
+==========================
+
+We have specific folder configuration:
+git-generator
+|
+|-cluster config
+| |-pre-staging
+| |  |-config.json
+| |-staging
+|    |-config.json
+|
+|-directories-subtype
+| |-git-dir-generator-ex1.yaml
+| |-git-dir-generator-ex2.yaml
+|
+|-file-subtype
+| |-git-file-generator-ex1.yaml
+|
+|-resources
+  |-nginx-helm
+  | |-templates dir ... 
+  | |-Chart.yaml
+  | |-custom-values.yaml
+  | |-values.yaml
+  |
+  |-nginx-manifests
+    |-sub-directory dir
+    | |-service.yaml
+    |-deployment.yaml
+    |-service.yaml
+    |-serviceaccount.yaml
+    |-test-connection.yaml
+
+
+
+EXAMPLE 1.1 - git generator using directories for creating multiple applications with one generator manifest
+-----------
+
+We want to deploy 2 different applications. We want application A to use resources/nginx-helm as source and application B to use resources/nginx-manifests as a source.
+
+Solution 1 - Create a different applications. We will have 2 different application manifests. (not using generator)
+
+Solution 2 - Create a generator manifest and create the applications that use different paths
+
+
+Create manifest called git-dir-generator-ex1.yaml
+
+git-dir-generator-ex1.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: git-directories-generator-ex1
+  namespace: argocd
+spec:
+  generators:                                                         # list of generators
+  - git:                                                              # git generator
+      repoURL: https://github.com/entermix123/ArgoCD-Labs             # used repo
+      revision: main                                                  # used branch as revision
+      directories:
+      - path: 09-argocd-applicationSet-1/git-generator/resources/*    # path to resources of the application
+  template:                                                           # application template
+    metadata:
+      name: '{{path.basename}}-application'                           # name of the application - app's dirs
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs           # used repo for app template
+        targetRevision: main                                          # used branch as revision
+        path: '{{path}}'                                              # used path from the generator
+      destination:
+        server: https://kubernetes.default.svc                        # url of the cluster - local cluster in this example
+        namespace: '{{path.basename}}-ns'                             # destination namespace created path.basename - app's dirs
+      syncPolicy:
+        automated: {}                                                 # automated sync
+        syncOptions:
+          - CreateNamespace=true                                      # automated namespace creation
+-----------------------------------------------
+
+This generator will create two different applications. The applications are in the "resources" folder. The first is with manifests and the second is with helm charts. The template is using "path.basename" variable for app name and namespace creation which are the names of the different folders in the resource directory.  
+
+Apply git generator manifest
+	terminal --> k apply -f git-dir-generator-ex1.yaml
+
+	# result: applicationset.argoproj.io/git-directories-generator-ex1 created
+
+In ArgoCD UI we can see that two applications are created.
+
+Confirm namepsaces creation
+	terminal --> k get ns
+
+	# result:
+ 	NAME                 STATUS   AGE
+	argocd               Active   22d
+	default              Active   22d
+	ingress-nginx        Active   22d
+	kube-node-lease      Active   22d
+	kube-public          Active   22d
+	kube-system          Active   22d
+	local-path-storage   Active   22d
+	nginx-helm-ns        Active   82s		# new namespace
+	nginx-manifests-ns   Active   82s		# new namespace
+
+
+Delete applications for the next examples
+	terminal --> k delete -f git-dir-generator-ex1.yaml
+
+	# result: applicationset.argoproj.io "git-directories-generator-ex1" deleted from argocd namespace
+
+
+Delete namespaces to keep the cluster clean and freshs
+	terminal --> k delete ns nginx-helm-ns   	# result: namespace "nginx-helm-ns" deleted
+	terminal --> k delete ns nginx-manifests-ns	# result: namespace "nginx-manifests-ns" deleted
+
+
+
+
+EXAMPLE 1.2 - git generator using directories for creating multiple applications with one generator manifest excluding specific app
+-----------
+
+
+git-dir-generator-ex2.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: git-directories-generator-ex2
+  namespace: argocd
+spec:
+  generators:
+  - git:                                                                                # git generator              
+      repoURL: https://github.com/entermix123/ArgoCD-Labs                               # used repo
+      revision: main                                                                    # used branch as revision
+      directories:
+      - path: 09-argocd-applicationSet-1/git-generator/resources/*                      # path to resource folder - all applications
+      - path: 09-argocd-applicationSet-1/git-generator/resources/nginx-manifests        # path to folder - excluded nginx manifest
+        exclude: true                                                                   # exclude this path from the generator
+  template:
+    metadata:
+      name: '{{path.basename}}-application'                                             # name of the application - app's dirs
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs                             # used repo for app template
+        targetRevision: main                                                            # used branch as revision
+        path: '{{path}}'                                                                # used path from the generator
+      destination:
+        server: https://kubernetes.default.svc                                          # cluster url - local cluster
+        namespace: '{{path.basename}}-ns'                             # destination namespace based on the applications dirs
+      syncPolicy:
+        automated: {}                                                                   # automated sync
+        syncOptions:
+          - CreateNamespace=true                                                        # automated namespace creation
+-----------------------------------------------
+
+We set parameter "exclude: true" for the specific path of the application we want to exclude from creation.
+
+Apply the manifest
+	terminal --> k apply -f git-dir-generator-ex2.yaml
+
+	# result: applicationset.argoproj.io/git-directories-generator-ex2 created
+
+In ArgoCD we can see that only one applications is created, because we exclusded the second one.
+
+
+Delete the application for the next example
+	terminal --> k delete -f git-dir-generator-ex2.yaml
+
+	# resut: applicationset.argoproj.io "git-directories-generator-ex2" deleted from argocd namespace
+
+Delete the namespace of the example to keep the cluster clean and fresh
+	terminal --> k delete ns nginx-helm-ns
+
+	# result: namespace "nginx-helm-ns" deleted
+
+
+
+
+
+Git Generator: File
+===================
+
+This generator create applications from maniest or JSON files found in the specified repository.
+
+We have 2 cluster configurations files on path "09-argocd-applicationSet-1\git-generator\cluster-config". Both are examples for different stages clusters. For each cluster we have configured path to the specific applications we want to deploy.
+
+
+pre-staging config.json
+-----------------------------------------------
+{
+    "cluster": {
+      "owner": "jordan",
+      "name": "pre-staging",
+      "path": "argocd-application/directoryOfmanifests",
+      "source_type": "directoryOfManifests",
+      "address": "https://kubernetes.default.svc",
+      "namespace": "pre-staging-ns"
+    }
+  }
+
+-----------------------------------------------
+
+
+staging config.json
+-----------------------------------------------
+{
+    "cluster": {
+      "owner": "jordan",
+      "name": "staging",
+      "path": "argocd-application/helm-charts/nginx",
+      "source_type": "helm", 
+      "address": "https://cluster2-control-plane:6443",
+      "namespace": "staging-ns"
+    }
+  }
+
+-----------------------------------------------
+
+
+
+We will use file git generator manifest called "git-file-generator-ex1.yaml".
+
+
+git-file-generator-ex1.yaml 
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: git-files-generator-ex1
+  namespace: argocd
+spec:
+  generators:
+  - git:
+      repoURL: https://github.com/entermix123/ArgoCD-Labs                                     # used repo
+      revision: main                                                                          # use main branch
+      files:
+      - path: 09-argocd-applicationSet-1/git-generator/cluster-config/**/config.json          # path to clusters config files
+  template:
+    metadata:
+      name: '{{cluster.name}}-application'                      # application name based on cluster name
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/entermix123/ArgoCD-Labs     # used repo for app template
+        targetRevision: main                                    # used branch as revision
+        path: '{{cluster.path}}'                                # path to application in the cluster configss 
+      destination:
+        server: '{{cluster.address}}'                           # url of the cluster from cluster config
+        namespace: '{{cluster.namespace}}'                      # destination namespace from cluster config
+      syncPolicy:
+        automated: {}                                           # automated sync
+        syncOptions:
+          - CreateNamespace=true                                # automated namespace creation
+-----------------------------------------------
+
+
+The 'path' field in 'generator' section uses double star "**" which means that in all subdiretories we are using config.json files.
+
+The template is configured with variables configured cluster configuration files - like application path, namespace and cluster address.
+
+Git generator converts cluster configurations files into 
+
+Apply the generator manifest
+	terminal --> k apply -f git-file-generator-ex1.yaml 
+
+	# result: applicationset.argoproj.io/git-files-generator-ex1 created
+
+In the ArgoCD UI we can see that 2 applications are acreated - one in each cluster.
+
+Delete the applications for next examples
+	terminal --> k delete -f git-file-generator-ex1.yaml 
+
+	# result: applicationset.argoproj.io "git-files-generator-ex1" deleted from argocd namespace
+
+
+Delete the created namespaces of the created applications on both cluster to keep them clean and fresh
+	Delete the 'pre-staging-ns' namespace in the local cluster
+		local cluster terminal --> k delete ns pre-staging-ns	# result: namespace "pre-staging-ns" deleted
+
+	Switch context to manage the external cluster and delete the 'staging-ns' namespace
+
+	List contexts
+		terminal --> kubectl config get-contexts
+
+		# result:
+		CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          	  kind-cluster2   kind-cluster2   kind-cluster2			# target context
+        	*  	  kind-kind       kind-kind       kind-kind       argocd	
+
+
+	Set the context of the external cluster
+		terminal --> kubectl config use-context kind-cluster2	
+
+		# result: Switched to context "kind-cluster2".
+
+	Delete the "staging-ns" namespace
+		terminal --> k delete ns staging-ns		# result: namespace "staging-ns" deleted
+
+		
+Set the context of the local cluster again
+	terminal --> kubectl config use-context kind-kind	
+
+	# result: Switched to context "kind-kind".
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
