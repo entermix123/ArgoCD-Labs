@@ -1,0 +1,709 @@
+Video link - https://www.youtube.com/watch?v=dBpauFPL64A&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=8
+
+Video Agenda:
+
+00:00 adding cluster manually
+00:19:17 adding cluster using terraform
+00:38:35 tracking strategies 
+
+Video Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+Prerequisites:
+==============
+
+Create second cluster with Docker and Kind:
+-------------------------------------------
+
+Set cluster configuration kind-config-nginx-2.yaml
+
+kind-config-nginx-2.yaml
+-----------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  apiServerAddress: "127.0.0.1"
+  apiServerPort: 6444  # Different port from first cluster (default is 6443)
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 32075  # Different from first cluster (32073)
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 32076  # Different from first cluster (32074)
+    protocol: TCP
+- role: worker
+- role: worker
+-----------------------------------------------
+
+
+Create the cluster
+	terminal --> kind create cluster --name cluster2 --config kind-config-nginx-2.yaml --image kindest/node:v1.34.0
+
+Find the context of the new cluster
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2			# target context
+        *  	  kind-kind       kind-kind       kind-kind       argocd
+
+Use 'kind-cluster2' context to add the new cluster to ArgoCD Server
+
+Set the context of the cluster2 to kubectl
+	terminal --> kubectl config use-context kind-cluster2
+
+Find the names of the containers of the cluster 2
+	terminal --> docker ps | findstr cluster2
+
+# result:
+3258b4633e7e   kindest/node:v1.34.0   "/usr/local/bin/entr???"   34 minutes ago   Up 34 minutes                                                                              cluster2-worker
+862e5199ab8a   kindest/node:v1.34.0   "/usr/local/bin/entr???"   34 minutes ago   Up 34 minutes                                                                              cluster2-worker2
+b6fd04b32bce   kindest/node:v1.34.0   "/usr/local/bin/entr???"   34 minutes ago   Up 34 minutes   0.0.0.0:32075->80/tcp, 0.0.0.0:32076->443/tcp, 127.0.0.1:6444->6443/tcp    cluster2-control-plane
+
+Find the port of the controlplane of the cluster2 - cluster2-control-plane
+	terminal --> docker inspect cluster2-control-plane --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+
+	# result: 172.18.0.6
+
+We will use this name "https://cluster2-control-plane:6443" or IP address ("https://172.18.0.6:6443") to configure the second cluster into ArgoCD Server. The name is recommended because the IP address can be changed.
+
+
+
+Login to ArgoCD CLI to cluster 1:
+---------------------------------
+
+We have installed ArgoCD on the first cluster so we need to login to it to configure the connection to the second cluster.
+
+Set the context to kubectl with the cluster with installed ArgoCD server on it
+	terminal --> kubectl config use-context kind-kind
+
+Find the password of admin user of ArgoCD
+	powershell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+	# result: password
+
+
+Connect to the Node with ArgoCD CLI
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin --password Tip-kdHFNljqdnq3
+	or
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin
+	terminal --> password
+
+
+
+
+
+Adding Cluster Manually
+=======================
+
+List clusters
+	terminal --> argocd cluster list
+
+	# result
+	SERVER                          NAME        VERSION  STATUS      MESSAGE  PROJECT
+	https://kubernetes.default.svc  in-cluster  1.34     Successful
+
+We can also check in ArgoCD UI/Settings/Clusters
+
+We have only the local Kind cluster we created from the start of the course.
+
+Adding another cluster:
+-----------------------
+First we need to create a service account that will be responsible for the applications to the newly added cluster. It must have the necessary access to this cluster - admin.
+
+Create cluster service account
+	terminal --> k create sa new-cluster-sa
+
+	# result: serviceaccount/new-cluster-sa created
+
+Print cluster role admin
+	terminal --> k get clusterrole cluster-admin
+
+	# result:
+	NAME            CREATED AT
+	cluster-admin   2025-12-10T11:36:54Z
+
+
+Show clusterrolebinding help commands
+	terminal --> k create clusterrolebinding --help
+
+Examples:
+  # Create a cluster role binding for user1, user2, and group1 using the cluster-admin cluster role
+  kubectl create clusterrolebinding cluster-admin --clusterrole=cluster-admin --user=user1 --user=user2 --group=group1
+
+
+Bind cluster-admin role to this new-cluster-sa by creating clusterrolebinding
+	terminal --> k create clusterrolebinding argocd-clusterbinding --clusterrole=cluster-admin --serviceaccount=default:new-cluster-sa 
+
+		# k						- kubectl common command
+		# create					- action	
+		# clusterrolebinding				- target object
+		# argocd-clusterbinding				- name of the target object
+		# --clusterrole=cluster-admin			- type of the target object
+		# --serviceaccount=default:new-cluster-sa	- used existing role as default
+
+
+	# result: clusterrolebinding.rbac.authorization.k8s.io/argocd-clusterbinding created
+
+This new serviceaccount now has admin permissions on the cluster.
+
+Test the permissions of the serviceaccount
+	terminal --> k auth can-i create pods --as system:serviceaccount:default:new-cluster-sa 
+	terminal --> k auth can-i delete pods --as system:serviceaccount:default:new-cluster-sa 
+	terminal --> k auth can-i create deploy --as system:serviceaccount:default:new-cluster-sa 
+	terminal --> k auth can-i delete deploy --as system:serviceaccount:default:new-cluster-sa 
+
+	# result: yes
+
+Manually geberate token for our new service account
+	terminal --> k create token new-cluster-sa 
+
+	# result: token
+
+
+Show details for the new cluster
+	terminal --> cat ~/.kube/config
+
+	# we have line "server: https://127.0.0.1:58857"		# this is the new cluster IP address
+
+Show certidicate of our new cluster
+# Linux/Mac
+	- Get the certificate directly from kubeconfig 
+		terminal --> kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}'
+
+	- Decode it to see the actual cert
+		terminal --> kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d
+
+# Kind cluster
+	- Get the CA cert from Kind
+		terminal --> docker cp kind-control-plane:/etc/kubernetes/pki/ca.crt ./ca.crt
+
+	- Then base64 encode it 
+		# Linux/Mac
+		terminal --> base64 -w 0 ca.crt
+		# Windows PowerShell:
+		terminal --> [Convert]::ToBase64String([IO.File]::ReadAllBytes("ca.crt"))
+
+
+Set cluster secret manifest file called cluster-secret.yaml
+
+cluster-secret.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: external-cluster
+  labels:
+    argocd.argoproj.io/secret-type: cluster			# important - seceret with type 'cluster'
+type: Opaque
+stringData:
+  name: https://cluster2-control-plane:6443			# name of the new clustr when is added to ArgoCD API Server
+  server: API_SERVER_ADDRESS		# set the new cluster IP address
+  config: |
+    {
+      "bearerToken": "SERVICE_ACCOUNT_TOKEN",		# set the token we generated
+      "tlsClientConfig": {
+        "insecure": false,
+        "caData": "BASE64 ENCODED CERTIFICATE"		# set the encoded cluster cetificate
+      }
+    }
+-----------------------------------------------
+
+
+Apply the secret
+	terminal --> k apply -f cluster-secret.yaml
+
+	# secret/external-cluster created
+
+
+List clusters
+	terminal --> argocd cluster list
+
+	# result
+	SERVER                          		NAME        V		     ERSION  STATUS      MESSAGE  PROJECT
+	https://cluster2-control-plane:6443		https://cluster2-control-plane:6443	     Unknown	 Cluster...
+	https://kubernetes.default.svc  		in-cluster  		     1.34     Successful
+
+
+
+
+Create and deploy application on the new cluster
+------------------------------------------------
+
+Create application manifest called app-external-cluster.yaml
+
+app-external-cluster.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: new-cluster-application                       			  # set name
+spec:
+  destination:
+    namespace: argocd					                # set namespace
+    name: https://cluster2-control-plane:6443                          # set the name of the added cluster
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    syncOptions:
+    - CreateNamespace=true						# enable CreateNamespace parameter
+    # automated: {}                   # disable automated sync
+-----------------------------------------------
+
+
+Find the context of the new cluster
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2			# target context
+        *  	  kind-kind       kind-kind       kind-kind       argocd
+
+Use 'kind-kind' context to add deploy the application
+
+Set the context of the cluster2 to kubectl
+	terminal --> kubectl config use-context kind-kind
+
+Create the application
+	terminal --> k apply -f app-external-cluster.yaml
+
+	# result: application.argoproj.io/new-cluster-application created
+
+We can see that application in ArgoCD UI. Sync the application.
+
+List new cluster's resources
+	new cluster controlplane terminal --> k get all --all-namespaces
+
+
+List clusters
+	terminal --> argocd cluster list
+
+	# result
+	SERVER                          	NAME        				VERSION  STATUS      MESSAGE  PROJECT
+	https://cluster2-control-plane:6443	https://cluster2-control-plane:6443 	1.34     Successful	 
+	https://kubernetes.default.svc  	in-cluster  				1.34     Successful
+
+
+
+
+
+adding cluster using terraform
+==============================
+
+
+We will connect new cluster using terrafomr and make all steps we made manually with IaC.
+
+We have 4 terraform files
+	- providers.tf
+	- main.tf
+	- variables.tf
+	- terraform.tfvars
+
+
+Hashicorp Kubernetes provider - https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs
+
+ArgoCD terrafomr provider - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs
+
+ArgoCD cluster resource - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs/resources/cluster
+
+
+providers.tf
+-----------------------------------------------
+terraform {
+  required_providers {
+    kubernetes = {
+      source = "hashicorp/kubernetes"
+      version = "3.0.1"
+    }
+    argocd = {
+      source = "argoproj-labs/argocd"
+      version = "7.12.4"
+    }
+  }
+}
+
+provider "kubernetes" {
+  config_path    = var.config_path
+  config_context = var.config_context
+}
+
+provider "argocd" {
+  alias       = "argocd_server"
+  server_addr = var.server_addr
+  username    = var.username
+  password    = var.password
+  insecure    = var.insecure
+}
+-----------------------------------------------
+
+
+
+
+kubernetes_service_account_v1 - https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/service_account_v1
+
+kubernetes_secret_v1 - https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/secret_v1
+
+kubernetes_cluster_role_binding_v1 - https://registry.terraform.io/providers/hashicorp/kubernetes/latest/docs/resources/cluster_role_binding_v1
+
+argocd_cluster - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs/resources/cluster
+
+
+main.tf
+-----------------------------------------------
+resource "kubernetes_service_account_v1" "argocd_manager_sa" {		# create kubernetes service account
+  metadata {
+    name      = var.sa_name		# service account name
+    namespace = var.sa_namespace	# service account namespace - default
+  }
+}
+
+resource "kubernetes_secret_v1" "argocd_manager_secret" {	# create kubernetes secret to create and set a token for our sa
+  metadata {
+    name = var.argocd-manager-secret					# secret name
+    annotations = {
+      "kubernetes.io/service-account.name" = "${kubernetes_service_account_v1.argocd_manager_sa.metadata.0.name}"
+    }
+  }
+  type = "kubernetes.io/service-account-token"	# generate token for the "kubernetes_service_account_v1" "argocd_manager_sa"
+}
+
+resource "kubernetes_cluster_role_binding_v1" "argocd_manager_binding" {  # create cluster role binding to bind service account to
+  metadata {								# cluster role called cluster admin
+    name = var.argocd-manager-binding		# set cluster role binding name
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"	# role based access control api group
+    kind      = "ClusterRole"			# set the kind of the binding
+    name      = "cluster-admin"			# set the role we want to bind with the binding
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = kubernetes_service_account_v1.argocd_manager_sa.metadata.0.name		# ref to the sa name
+    namespace = kubernetes_service_account_v1.argocd_manager_sa.metadata.0.namespace	# ref to the sa namespace
+  }
+}
+
+data "kubernetes_secret_v1" "argocd_manager_secret" {		# retrieve external resporce data
+  metadata {
+    name = kubernetes_secret_v1.argocd_manager_secret.metadata.0.name	# take data from the external cluster config
+  }
+}
+
+resource "argocd_cluster" "new_cluster" {	# ArgoCD cluster
+  provider = argocd.argocd_server		# alias of our current ArgoCD server - "lcaolhost:32074"
+  server = var.new_cluster_server_addr		# new cluster IP address
+  name     = "external"
+
+  config {	# token from kubernetes_service_account_v1's (argocd_manager_sa) kubernetes_secret_v1 (argocd_manager_secret)
+    bearer_token = "${lookup(data.kubernetes_secret_v1.argocd_manager_secret.data, "token")}"
+
+    tls_client_config {		# use new cluster certificate
+      ca_data  = "${lookup(data.kubernetes_secret_v1.argocd_manager_secret.data, "ca.crt")}"
+      insecure = false		# set secure connection 
+    }
+  }
+}
+-----------------------------------------------
+
+
+
+variables.tf
+-----------------------------------------------
+variable "server_addr" {
+  type        = string
+  description = "The server address"
+}
+
+variable "username" {
+  type        = string
+  description = "The Username"
+}
+
+variable "password" {
+  type        = string
+  description = "The Password"
+}
+
+variable "insecure" {
+  type        = bool
+  description = "The Connection Insecure flag"
+}
+
+variable "sa_name" {
+  type        = string
+  description = "The name of argocd serviceaccount"
+}
+
+variable "sa_namespace" {
+  type        = string
+  description = "The namespace of argocd serviceaccount"
+}
+
+variable "config_path" {
+  type        = string
+  description = "The path of kube config"
+}
+
+variable "config_context" {
+  type        = string
+  description = "The context in kube config"
+}
+
+variable "argocd-manager-binding" {
+  type        = string
+  description = "The name of argocd manager clusterrole binding"
+}
+
+variable "argocd-manager-secret" {
+  type        = string
+  description = "The name of argocd manager secret"
+}
+
+variable "argocd_secret_cluster" {
+  type        = string
+  description = "The name of argocd secret cluster"
+}
+
+variable "secret_labels" {
+  type        = map(string)
+  description = "The Labels of argocd manager secret"
+}
+
+variable "new_cluster" {
+  type        = string
+  description = "The name of new cluster"
+}
+
+variable "new_cluster_server_addr" {
+  type        = string
+  description = "The name of new cluster server address"
+}
+-----------------------------------------------
+
+
+terraform.tfvars
+-----------------------------------------------
+server_addr            = "localhost:32074"		# ArgoCD host connection address and port
+username               = "admin"			# ArgoCD username
+password               = "password"			# ArgoCD admin password
+insecure               = true
+sa_name                = "argocd-manager-sa"		# set new cluster's service account name
+sa_namespace           = "default"
+config_path            = "~/.kube/config"		# cluster config path
+config_context         = "kind-cluster2"		# new cluster context (as what user, in what cluster and namespace)
+argocd-manager-binding = "argocd-manager-binding"	# new cluster admin binding
+argocd-manager-secret  = "argocd-manager-secret"	# new cluster admin role secret
+argocd_secret_cluster  = "argocd-secret-cluster"	# new cluster secret
+secret_labels = {
+  "argocd.argoproj.io/secret-type" = "cluster"		# type of the resource
+}
+new_cluster             = "cluster2"			# new cluster name
+new_cluster_server_addr = "https://cluster2-control-plane:6443"	# set the new cluster container name and its port
+-----------------------------------------------
+
+Format terrafomr files
+	terminal --> terraform fmt
+
+Download and install providers configurations
+	terminal --> terraform init		# result :Terraform has been successfully initialized!
+
+Validate terraform files
+	terminal --> terraform validate		# result: Success! The configuration is valid.
+
+Plan terraform resources
+	terminal --> terraform plan		# result: Plan: 4 to add, 0 to change, 0 to destroy.
+
+Apply terraform resources
+	terminal --> terraform apply
+	terminal --> yes
+
+	# result: Apply complete! Resources: 4 added, 0 changed, 0 destroyed.
+
+
+List service account
+	terminal --> k get sa
+
+# result:
+NAME                               SECRETS   AGE
+argocd-manager-sa		   0	     20s		# this is our new service account
+argocd-application-controller      0         11d
+argocd-applicationset-controller   0         11d
+argocd-dex-server                  0         11d
+argocd-notifications-controller    0         11d
+argocd-redis-secret-init           0         11d
+argocd-repo-server                 0         11d
+argocd-server                      0         11d
+default                            0         11d
+new-cluster-sa                     0         15h
+
+
+List secrets
+	terminal --> k get secret
+
+NAME                                 TYPE                 			DATA   AGE
+argocd-manager-secret	 	     Kubernetes.io/service-account-token	3      35s	# this is our new secret
+argocd-initial-admin-secret          Opaque               			1      11d
+argocd-notifications-secret          Opaque               			0      11d
+argocd-redis                         Opaque               			1      11d
+argocd-secret                        Opaque               			5      11d
+https-private-repo-secret            Opaque               			4      4d
+https-private-repo-secret-template   Opaque               			4      3d22h
+sh.helm.release.v1.argocd.v1         helm.sh/release.v1   			1      11d
+ssh-private-repo-secret              Opaque               			3      3d23h
+ssh-private-repo-secret-template     Opaque               			3      3d21h
+
+
+List clusters
+	terminal --> argocd cluster list
+
+# result
+SERVER                               NAME                                 VERSION  STATUS   MESSAGE                                                  PROJECT
+https://cluster2-control-plane:6443  https://cluster2-control-plane:6443           Unknown  Cluster has no applications and is not being monitored.
+https://kubernetes.default.svc       in-cluster                                    Unknown  Cluster has no applications and is not being monitored.
+
+When we deploy application the status will be 'Successful'
+
+
+
+Create and deploy application on the new cluster
+------------------------------------------------
+
+Create application manifest called app-external-cluster-terraform.yaml
+
+app-external-cluster-terraform.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: new-cluster-application-terraform                       			  # set name
+spec:
+  destination:
+    namespace: terraform					                # set namespace
+    name: https://cluster2-control-plane:6443      # set the name of the added cluster or its IP address if name is not set
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    syncOptions:
+    - CreateNamespace=true						# enable CreateNamespace parameter
+    # automated: {}                   # disable automated sync
+-----------------------------------------------
+
+Create the application
+	terminal --> k apply -f app-external-cluster.yaml
+
+	# result: application.argoproj.io/new-cluster-application-terraform created
+
+We can see that application in ArgoCD UI. Sync the application.
+
+List new cluster's resources
+	new cluster controlplane terminal --> k get all --all-namespaces
+
+
+List clusters
+	terminal --> argocd cluster list
+
+# result
+SERVER                          NAME                     VERSION  STATUS      MESSAGE             PROJECT
+https://172.18.0.7:6443         https://172.18.0.7:6443  1.34     Successful         		# this is the new cluster                                   
+https://kubernetes.default.svc  in-cluster                        Unknown     Cluster has no applications and is not being monitored.
+
+
+
+
+
+
+
+tracking strategies
+===================
+
+
+We will look over 2 strategies
+	- git 
+	- helm
+
+git.yml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: git-tracking-strategies
+  namespace: argocd
+spec:
+  destination:
+    namespace: git-tracking-strategies
+    name: in-cluster
+  project: default
+  source:
+    path: v03-argocd-applications/directoryOfmanifests
+    repoURL: "https://github.com/devopshobbies/argocd-tutorial.git"
+    targetRevision: main # HEAD/Branch tracking ex: HEAD/main || tag tracking ex: v1 || commit pinning ex: 9814933
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated: {}
+-----------------------------------------------
+
+
+helm.yml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: helm-tracking-strategies
+  namespace: argocd
+spec:
+  project: default
+  source:
+    chart: sealed-secrets
+    repoURL: https://bitnami-labs.github.io/sealed-secrets
+    targetRevision: "2.13.3" # use the version number ex: 1.16.1 || use a range ex: 1.* or 1.2.* or >=1.2.0 <1.3.0 || use the latest version ex: '*'
+    helm:
+      releaseName: sealed-secrets
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: helm-tracking-strategies
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated: {}
+-----------------------------------------------
+
+
+If we are using Git then the target version can be 
+	- HEAD - latest commit
+	- main (branch name) - ArgoCD will continuuslly track and compare the branch sa desired state with the live state
+	- tag - example: v1 - more sabel method. When a manifest or modified or created, Git is tagging/retagging them.
+	- commit - most restrictive method and its used to controll production environments
+
+If we using HELM then the target revision is different. It can be specific version for Helm or use a range 
+	- 1.* 		# this mean >=1.0.0 < 2.0.0
+	- 1.2.*		# this mean >=1.2.0 < 1.3.0
+	- '*'		# this mean latest version
+
+
+
+
+
+
+
+
