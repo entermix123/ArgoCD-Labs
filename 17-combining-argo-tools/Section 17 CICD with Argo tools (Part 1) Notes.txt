@@ -1,0 +1,1262 @@
+Video link - https://www.youtube.com/watch?v=WxLqz9TyRSc&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=17
+
+Video Agenda:
+
+00:00 Description of the scenario
+00:12:05 The codes related to argo-workflows
+00:40:12 The codes related to argo-rollouts
+00:42:55 The codes related to argo-cd
+00:44:29 Implementation of scenario
+
+Video Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+Prerequisites
+=============
+
+1. We should have atleast one running cluster:
+----------------------------------------------
+
+List clusters
+	terminal --> kubectl config get-clusters
+
+	# result: 
+	kind-kind
+	cluster2
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       			# current cluster
+
+2. We need to have installed:
+-----------------------------
+	- ArgoCD
+	- Argo Rollouts
+	- Argo Workflows
+	- Nexus - private image registry
+	- MinIO artifact repository
+
+
+We can find prerequisites installation instructions and resources here - https://github.com/entermix123/ArgoCD-Labs/blob/main/00-Install%20Guide/Kubernetes%20Kind%20ArgoCD%20Install%20Guide%20for%20Windows.txt
+
+
+3. Create namespace called 'argo-events' and set it as default namespace
+------------------------------------------------------------------------
+
+Create 'workflows' namespace
+	terminal --> k create ns argo-events
+
+	# result: argo-events/workflows created
+
+Set 'workflows' namespace as default namepsace
+	terminal --> k config set-context --current --namespace=argo-events
+
+	# result: Context "kind-kind" modified.
+
+Confirm default namespace modification
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       argo-events	# current cluster and namepsace
+
+4. Create a rolebinding for admin service account that will execute workflows in the 'argo-events' namespace
+----------------------------------------------------------------------------------------------------------
+
+Create rolebinding for admin service account in working 'argo-events' namespace
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
+
+		# k 					- common kubectl command
+		# create				- action
+		# rolebinding				- object
+		# default-admin				- object name
+		# --clusterrole=admin			- used cluster role
+		# --serviceaccount=workflows:default	- target service account <namespcae>:<useraccount>
+		# -n workflows				- target namespace
+	
+	
+	# result: rolebinding.rbac.authorization.k8s.io/default-admin created
+
+
+We granted admin privileges of argo default service account in workflows namespace.
+
+We should be able to access Argo Workflows UI and execute workflows - https://argo-workflows.localhost:32074/workflows/workflows/
+
+
+
+5. Set configmap to grand Argo Workflows previleges to use artifacts in MinIO in the 'argo-events' namespace
+------------------------------------------------------------------------------------------------------------
+
+To use artifacts we need to configure MinIO repository to store the artifacts from the 'argo-event' namespace. MinIO repository is configured in artifact-repository-cm.yaml configmap file below.
+
+artifact-repository-cm.yaml
+-------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # If you want to use this config map by default, name it "artifact-repositories". Otherwise, you can provide a reference to a
+  # different config map in `artifactRepositoryRef.configMap` in the workflow.
+  name: artifact-repository           # this name is not the default name
+  annotations:
+    # v3.0 and after - if you want to use a specific key, put that key into this annotation.
+    workflows.argoproj.io/default-artifact-repository: minio-artifact-repo
+data:
+  minio-artifact-repo: |
+    s3:
+      bucket: my-bucket
+      endpoint: argo-artifacts-minio.argo:9000
+      insecure: true
+      accessKeySecret:
+        name: my-minio-cred
+        key: access-key 
+      secretKeySecret:
+        name: my-minio-cred
+        key: secret-key
+-------------------------------------------------
+
+Apply the configmap for artifact repository
+	terminal --> k apply -f artifact-repository-cm.yaml -n argo-events
+
+	# result: configmap/artifact-repository created
+
+
+
+
+
+
+Description of the scenario
+===========================
+
+Project Structure
+-----------------
+
+17-combining-argo-tools
+|
+|--app
+|  |-- Dockerfile
+|  |-- index.html
+|
+|--argocd
+|  |-- argo-app.yaml
+|
+|--argo-rollouts
+|  |-- nginx-ingress.yaml
+|  |-- nginx-rollouts.yaml
+|  
+|--arg-workflows
+   |-- build-push.yaml
+   |-- clone-repo.yaml
+   |-- update-manifest.yaml
+   |-- workflows.yaml
+
+
+
+In this scenario we will create real world CI/CD pipeline with ArgoCD, Argo Rollouts and Argo Workflows. 
+
+We will use Dockerto create a simple nginx web application container with custom user page. The resource are in the 'app' folder in our '17-combining-argo-tools' project.
+
+We have 2 files
+	- Dockerfile
+	- index.html
+
+Dockerfile
+-------------------------------------------------
+FROM nginx:alpine
+COPY index.html /usr/share/nginx/html/
+-------------------------------------------------
+
+
+index.html
+-------------------------------------------------
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to My Website</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        .container {
+            text-align: center;
+            color: #333;
+        }
+
+        h1 {
+            font-size: 3em;
+            margin-bottom: 0.5em;
+            color: #3498db;
+        }
+
+        p {
+            font-size: 1.5em;
+            margin-top: 0;
+            color: #777;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Welcome to My Website, Version 1.0</h1>
+    </div>
+</body>
+</html>
+-------------------------------------------------
+
+We can test tha application in VSCode using Liveserver extension.
+
+Create the image with Docker
+	terminal --> docker build -t nginx:alpine .
+
+When we update our application and we want to deploy the new version we need to rebuild the image.
+
+These are the 3 actions we will automate with Argo Workflows:
+	- Rebuild the Docker image when updated
+	- Push the Docker image into image registry 
+	- Modifying the rollouts manifest to point to the new docker image
+
+So when we make a change in our application Argo Workflows will build a Docker image based on the latest changes on our application and push the image into the registry.
+
+
+We will to isntall Nexus as private image and artifact registry platform locally on our Windows PC
+
+Install Nexus private image registry with shell
+-----------------------------------------------
+
+1. Download and install Java from: https://www.oracle.com/java/technologies/downloads/#jdk25-windows
+
+	Confirm java installation
+		terminal --> java -version
+
+2 Download Nexus Repository OSS (Open Source) for Windows - https://www.sonatype.com/products/nexus-community-edition-download
+
+3. Install Nexus
+	- unarchive on the PC and navigate to the folder
+	- Open shell as administrator and run
+		terminal --> .\install-nexus-service.bat
+
+4. Start Nexus service
+	terminal --> net start SonatypeNexusRepository
+
+	Check if port 8081 is listening
+		terminal --> netstat -ano | findstr :8081
+
+5. Login to Nexus on http://localhost:8081/#login
+
+	Find the initial generated credentials in the installed directory 'sonatype-work\nexus3\admin.password' or with shell
+		terminal --> type E:\Installed\nexus-3.88.0-08-win-x86_64\sonatype-work\nexus3\admin.password
+
+	Login to the app and finish the installation process
+		Username: admin
+		Password: password
+
+	
+
+When we make a change to our application argo workflows will build the new image and push the image to our Nexus image registry. The last step Argo Workflow will make is to modify hte image name used in the rollout to point to the image with the new  version of the application.
+
+nginx-rollouts.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: nginx-rollouts
+spec:
+  replicas: 5
+  strategy:
+    canary:
+      steps:
+      - setWeight: 20
+      - pause: {}
+      - setWeight: 40
+      - pause: {duration: 10s}
+      - setWeight: 60
+      - pause: {duration: 20s}
+      - setWeight: 80
+      - pause: {duration: 1m}
+  selector:
+    matchLabels:
+      app: nginx-rollouts
+  template:
+    metadata:
+      labels:
+        app: nginx-rollouts
+    spec:
+      containers:
+      - name: nginx-rollouts
+        image: 192.168.1.2:8085/nginx:130a5b21-3166-4ab7-a27c-51f64a198f35		# used image
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  ports:
+  - port: 8080
+    targetPort: 80
+  selector:
+    app: nginx-rollouts
+-------------------------------------------------
+
+After the change Argo Workflows will push this commit into my GitOps repository.
+
+
+We use ingress resource to expose the application.
+
+nginx-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nginx-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: argo.demo
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-service
+            port:
+              number: 8080
+-------------------------------------------------
+
+
+
+We are using also ArgoCD Applications. If ArgoCD detects any changes in the application path of the configured repository it will apply these changes into Kuberentes cluster. This changes include manual and automated commits. This mean that when Argo Workflows push the changes with the replaced Docker image with the new one in the Argo Rollouts manifet, ArgoCD will detect and apply the changes to the cluster. So we will seitch to the new versiion of the application using ArgoCD.
+
+argo-app.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argo-demo-application
+  namespace: argocd
+spec:
+  destination:
+    namespace: argo-demo
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: 17-combining-argo-tools/argo-rollouts
+    repoURL: https://github.com/entermix123/ArgoCD-Labs
+    targetRevision: main
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated:
+      prune: true
+      selfHeal: true
+-------------------------------------------------
+
+
+
+
+
+
+The codes related to argo-workflows
+===================================
+
+Project Structure
+-----------------
+
+17-combining-argo-tools
+|
+|--app
+|  |-- Dockerfile
+|  |-- index.html
+|
+|--argocd
+|  |-- argo-app.yaml
+|
+|--argo-rollouts
+|  |-- nginx-ingress.yaml
+|  |-- nginx-rollouts.yaml
+|  
+|--arg-workflows
+   |-- build-push.yaml
+   |-- clone-repo.yaml
+   |-- update-manifest.yaml
+   |-- workflows.yaml
+
+
+
+Create Nexus image repository
+-----------------------------
+- Open Nexus - http://localhost:8081
+- Go to Settings/Repositories/Create Repository/docker(hosted)
+	- Name: argo-demo
+	- Other Connectors
+		- HTTP: 8085
+	- Docker Registry API Support
+		Select Checkbox "Allow clients to use the V1 API to interact with this repository"
+	- Create Repository
+
+- Go to Settings/Security/Realms
+	- Set Docker Bearer Token Realm to Active
+	- Save
+
+- Configure Docker Desktop to communicate with the created repository
+	- Open Docker/Settings/Docker Engine
+	- Add
+	-------------------------------------------------
+	{
+	  "insecure-registries": ["localhost:8085"]
+	}
+	-------------------------------------------------
+	- Apply and Restart
+
+
+
+
+INSTALL AND CONFIGURE ARTIFACT REPOSITORY MINIO
+-----------------------------------------------
+
+Configure MinIO artifact repository if not configured in the last session - 16 - Argo-Workflow Custom Resource Kinds & Artifacts
+
+We can also see the short instruction here: https://github.com/entermix123/ArgoCD-Labs/blob/main/00-Install%20Guide/Kubernetes%20Kind%20ArgoCD%20Install%20Guide%20for%20Windows.txt
+
+Access MinIO artifact repository on http://minio.localhost:32073/login
+	We should have 'my-bucket' created
+
+
+
+CONFIGURE ARGO WRKFLOW ACCESS TO NEXUS
+--------------------------------------
+
+INFO:
+--------------------------
+Add Nexus registry to Docker container runtime on Linux:
+
+Find Nexus IP address if it is running as separate application
+	terminal --> ip addr show
+
+Find Nexus IP address if it is running as container
+	terminal --> docker inspect <nexus-container> | grep IPAddress
+
+Create file config file in '/etc/docker/daemon.json'
+	terminal --> vim /etc/docker/daemon.json
+
+daemon.json
+-----------------
+{ "insecure-registries": [host.docker.internal:8085] }
+-----------------
+--------------------------
+
+
+
+
+CONFIGURE CONTAINERD TO PULL IMAGES FROM NEXUS
+----------------------------------------------
+
+Manual:
+-------
+We need to set configuration to our ContainerD Runtime (because we are running Kubernetes Kind Cluster)
+	List nodes and find controlplane
+		terminal --> docker ps	
+		
+		# result: kind-control-plane
+
+	Connect to the kind-control-plane node
+		terminal --> docker exec -it kind-control-plane bash
+
+		Modify the configurations
+			terminal --> 
+cat >> /etc/containerd/config.toml << 'EOF'
+[plugins."io.containerd.grpc.v1.cri".registry.mirrors."host.docker.internal:8085"]
+  endpoint = ["http://host.docker.internal:8085"]
+[plugins."io.containerd.grpc.v1.cri".registry.configs."host.docker.internal:8085".tls]
+  insecure_skip_verify = true
+EOF
+	
+		Verify the config
+			terminal --> cat /etc/containerd/config.toml
+
+		Restart ContainerD
+			terminal --> systemctl restart containerd
+
+		Exit controlplane
+			terminal --> exit
+
+Do this for all nodes
+
+
+
+With Daemonset:
+---------------
+
+Create containerd daemonset configuration
+
+containerd-config-daemonset.yaml
+-------------------------------------------------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: containerd-registry-config
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: containerd-registry-config
+  template:
+    metadata:
+      labels:
+        name: containerd-registry-config
+    spec:
+      hostPID: true
+      hostNetwork: true
+      initContainers:
+      - name: configure-containerd
+        image: alpine:latest
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          
+          # Check if configuration already exists
+          if grep -q "host.docker.internal:8085" /host/etc/containerd/config.toml 2>/dev/null; then
+            echo "Registry configuration already exists, skipping..."
+            exit 0
+          fi
+          
+          # Append registry configuration
+          cat >> /host/etc/containerd/config.toml << 'EOF'
+
+          [plugins."io.containerd.grpc.v1.cri".registry.mirrors."host.docker.internal:8085"]
+            endpoint = ["http://host.docker.internal:8085"]
+          [plugins."io.containerd.grpc.v1.cri".registry.configs."host.docker.internal:8085".tls]
+            insecure_skip_verify = true
+          EOF
+          
+          echo "Configuration added successfully"
+          
+          # Find and restart containerd process
+          CONTAINERD_PID=$(nsenter -t 1 -m -u -i -n -p pgrep containerd | head -n 1)
+          if [ -n "$CONTAINERD_PID" ]; then
+            echo "Sending SIGHUP to containerd (PID: $CONTAINERD_PID)"
+            nsenter -t 1 -m -u -i -n -p kill -HUP $CONTAINERD_PID
+            sleep 2
+            echo "Containerd reloaded"
+          else
+            echo "Warning: Could not find containerd process"
+          fi
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: containerd-config
+          mountPath: /host/etc/containerd
+      containers:
+      - name: pause
+        image: registry.k8s.io/pause:3.9
+        resources:
+          requests:
+            cpu: 1m
+            memory: 4Mi
+      volumes:
+      - name: containerd-config
+        hostPath:
+          path: /etc/containerd
+          type: Directory
+      tolerations:
+      - operator: Exists
+-------------------------------------------------
+
+Apply the deamonset
+	terminal --> kubectl apply -f containerd-config-daemonset.yaml
+
+	# result: daemonset.apps/containerd-registry-config created
+
+Wait 2 minutes and delete the daemonset
+	terminal --> kubectl delete -f containerd-config-daemonset.yaml
+
+
+We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
+
+Configure Argo Workflows to communicate with Nexus repository
+	- Open Docker/Settings/Docker Engine
+	- Add
+	-------------------------------------------------
+	{
+	  "insecure-registries": ["localhost:8085", "host.docker.internal:8085"]
+	}
+	-------------------------------------------------
+	- Apply and Restart
+
+
+Test Docker connection with Nexus by pushing the image created earlier
+	Login to Nesus true the configured address
+		terminal --> docker login host.docker.internal:8085
+		terminal --> admin
+		terminal --> nexsus_password
+
+	Retag (rename) and push the image we created earlier to the Nexus repository
+		terminal --> docker tag nginx:v1 host.docker.internal:8085/argo-demo/nginx:alpine
+		terminal --> docker push host.docker.internal:8085/argo-demo/nginx:alpine
+
+	The image should be visualized in the Nexus repository
+		- Go to http://localhost:8081/#browse/browse
+		- Then navigate to argo-demo/v2/nginx/tags
+
+
+GENERATE GITHUB CREDENTIALS
+---------------------------
+
+We need to provide GitHub credentials to our workflow to access the application repository and manage it - clone it, make changes to the manifests etc.
+
+Login to GitHub - https://github.com/
+Go to https://github.com/settings/tokens
+	- Generate New Token (classic)
+		- Name: argo-workflows
+		- Scope
+			- repo - Full control of private repositories 
+			- workflow - Update GitHub Action workflows (Optional)
+		- Generate Token
+	- Copy the value (save it safe temporary)
+
+Create local environment variables with GitHub Username and Token
+	terminal --> $GITHUB_USERNAME = "git_username"			# set your username
+	terminal --> $GitHubTokenName = "argo-workflows"		# set the token name
+	terminal --> $GITHUB_TOKEN = "generated_token"			# set the token
+
+Test the creation of the environment cariables
+	terminal --> echo $GITHUB_USERNAME
+	terminal --> echo $GitHubTokenName
+	terminal --> echo $GITHUB_TOKEN
+
+
+
+We will use the environment variables to create secrets objects in our Kubernetes cluster and set them in the workflow.
+
+CREATE SECRETS FOR GITHUB CREDENTAILS
+-------------------------------------
+Create secret in our working namespace to use GitHub credentials safetly
+	terminal --> kubectl create secret generic github-credentials --from-literal=username=$GITHUB_USERNAME --from-literal=token_name=$GitHubTokenName --from-literal=token=$GITHUB_TOKEN -n argo-events
+
+	# result: secret/github-credentials created
+
+
+
+GIVE ARGO-EVENTS NAMESPACE DEFAULT SERVICE ACCOUNT PERMISSIONS
+--------------------------------------------------------------
+
+Create rolebinding for admin service account in working 'argo-events' namespace
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
+
+		# k 					- common kubectl command
+		# create				- action
+		# rolebinding				- object
+		# default-admin				- object name
+		# --clusterrole=admin			- used cluster role
+		# --serviceaccount=workflows:default	- target service account <namespcae>:<useraccount>
+		# -n workflows				- target namespace
+	
+	
+	# result: rolebinding.rbac.authorization.k8s.io/default-admin created
+
+
+
+MAIN WORKFLOW
+-------------
+
+Below we can see all the files and field explanations connected with argo workflows:
+
+workflows.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-demo-
+spec:
+  arguments:
+    parameters:
+      - name: repo-url
+        value: https://github.com/entermix123/ArgoCD-Labs.git
+      - name: branch
+        value: main
+      - name: nexus-registry
+        value: host.docker.internal:8085
+  artifactRepositoryRef:
+    configMap: artifact-repository
+  entrypoint: ci
+  templates:
+  - name: ci
+    dag:
+      tasks:
+      - name: clone-repo-task
+        templateRef:
+          name: clone-repo-wf-template
+          template: clone-repo
+      - name: build-push-task
+        templateRef:
+          name: build-push-wf-template
+          template: build-and-push
+        arguments:
+          artifacts:
+            - name: source
+              from: "{{tasks.clone-repo-task.outputs.artifacts.source}}"
+        dependencies: [clone-repo-task]
+      - name: update-manifest-task
+        templateRef:
+          name: update-manifest-wf-template
+          template: update-manifest
+        arguments:
+          artifacts:
+            - name: source
+              from: "{{tasks.clone-repo-task.outputs.artifacts.source}}"
+        dependencies: [clone-repo-task, build-push-task]
+-------------------------------------------------
+
+
+
+
+
+Below we can check the 3 workflows - the tasks in the previous workflow:
+	- clone-repo.yaml
+	- build-push.yaml
+	- update-manifest.yaml
+
+
+CLONE REPO TASK
+---------------
+
+This is the first task that the dag template will execute:
+
+clone-repo.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: clone-repo-wf-template
+spec:
+  templates:
+    - name: clone-repo
+      outputs:
+        artifacts:
+        - name: source
+          path: /tmp/source
+      script:
+        image: alpine/git
+        command: [sh]
+        source: |
+          git clone {{workflow.parameters.repo-url}} /tmp/source
+-------------------------------------------------
+
+
+
+
+BUILD AND PUSH IMAGE TASK
+-------------------------
+
+This is the second task that the dag template will execute.
+
+For this task we need to create Docker secret called 'docker-config-secret' in our Argo Workflows working 'argo-events' namespace. We have to mount our docker credentials to this sescret.
+
+We need to create docker-config.json file and set the Nexus credentials so the workflow can pull and push images.
+
+1. Encode the nexus creadentials with shell
+	terminal --> $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("admin:admin123"))
+$auth
+	result: YWRtaW46YWRtaW4xMjM=
+
+2. Create docker-config.json
+-----------------------------------------
+{
+  "auths": {
+    "host.docker.internal:8085": {
+      "auth": "YWRtaW46YWRtaW4xMjM="
+    }
+  }
+}
+-----------------------------------------
+
+From the folder location create Docker secret
+	terminal --> kubectl create secret generic docker-config-secret --from-file=config.json=./docker-config.json -n argo-events
+
+	# result: secret/docker-config-secret created
+
+
+We mount the created Docker secret as volume to have allow Docker to access to the Nexus repository
+
+build-push.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: build-push-wf-template
+spec:
+  templates:
+    - name: build-and-push
+      inputs:
+        artifacts:
+        - name: source
+          path: /tmp/source
+      volumes:
+        - name: docker-config-secret
+          secret:
+            secretName: docker-config-secret
+      container:
+        readinessProbe:
+          exec:
+            command: [ sh, -c, "buildctl debug workers" ]
+        image: moby/buildkit:v0.9.3-rootless
+        volumeMounts:
+          - name: docker-config-secret
+            mountPath: /.docker
+        workingDir: /tmp/source/17-combining-argo-tools/app
+        env:
+          - name: BUILDKITD_FLAGS
+            value: --oci-worker-no-process-sandbox
+          - name: DOCKER_CONFIG
+            value: /.docker
+        command:
+          - buildctl-daemonless.sh
+        args:
+          - build
+          - --frontend
+          - dockerfile.v0
+          - --local
+          - context=.
+          - --local
+          - dockerfile=.
+          - --output
+          # - type=image,name={{workflow.parameters.nexus-registry}}/nginx:{{workflow.uid}},push=true,registry.insecure=true        # old
+          - type=image,name={{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}},push=true,registry.insecure=true
+        securityContext:
+          privileged: true
+-------------------------------------------------
+
+The output of the template is image with name 'nginx' and version as the workflow uid (unique every time). Then this image is pushed to our Nexus image registry.
+
+
+
+
+
+UPDATE MANIFESTS TASK
+---------------------
+
+This is the third task that the dag template will execute.
+
+
+
+update-manifest.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: update-manifest-wf-template
+spec:
+  templates:
+    - name: update-manifest
+      inputs:
+        artifacts:
+        - name: source
+          path: /tmp/source
+      script:
+        image: alpine/git
+        workingDir: /tmp/source/17-combining-argo-tools/argo-rollouts
+        command: [sh]
+        env:                                    # read credentials from secret
+          - name: GIT_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: github-credentials
+                key: username
+          - name: GIT_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: github-credentials
+                key: token
+          - name: GitHubTokenName
+            valueFrom:
+              secretKeyRef:
+                name: github-credentials
+                key: token_name
+        source: |
+          # sed -i 's|image:.*|image: {{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}}|' nginx-rollout.yaml
+          sed -i 's|image: host.docker.internal:8085/argo-demo/nginx:.*|image: {{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}}|' nginx-rollouts.yml      
+          git config user.name "$GIT_USERNAME"
+          git config user.email "your-email@example.com"
+          git add .
+          git commit -m "image.tag has been changed to {{workflow.uid}}"
+          
+          # Push with credentials from env vars
+          git remote set-url origin https://${GitHubTokenName}:${GIT_TOKEN}@github.com/entermix123/ArgoCD-Labs.git
+          git push origin {{workflow.parameters.branch}}
+-------------------------------------------------
+
+
+
+
+
+
+The codes related to argo-rollouts
+==================================
+
+We have two resources
+	- nginx-rollout.yaml
+	- nginx-ingress.yaml
+
+
+In this scenario we are using canary deployment strategy with setWeights steps.
+
+nginx-rollout.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: nginx-rollouts
+spec:
+  replicas: 5                       # number of replicas
+  strategy:
+    canary:                         # canary deployment strategy
+      steps:
+      - setWeight: 20               # 20% of traffic (1 of 5 pods)
+      - pause: {}                   # manual promotion
+      - setWeight: 40               # 40% of traffic (2 of 5 pods)
+      - pause: {duration: 10s}      # 10s pause before autoatic promotion
+      - setWeight: 60               # 60% of traffic (3 of 5 pods)
+      - pause: {duration: 20s}      # 20s pause before autoatic promotion
+      - setWeight: 80               # 80% of traffic (4 of 5 pods)
+      - pause: {duration: 1m}       # 1min pause before autoatic promotion
+  selector:
+    matchLabels:
+      app: nginx-rollouts
+  template:
+    metadata:
+      labels:
+        app: nginx-rollouts
+    spec:
+      containers:
+      - name: nginx-rollouts
+        image: host.docker.internal:8085/argo-demo/nginx:alpine               # automatically changed version when app change is commited
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1                  # backend service of the rollout
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  ports:
+  - port: 8080
+    targetPort: 80
+  selector:
+    app: nginx-rollouts
+-------------------------------------------------
+
+
+We are using ingress resource to expose the application locally
+
+nginx-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nginx-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: argo.demo
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-service
+            port:
+              number: 8080
+-------------------------------------------------
+
+
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 argo.demo'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim etc/hosts
+	- Add '127.0.0.1 argo.demo'
+	- save changes and exit - escape, :wq!, enter
+
+After creation of the ingress we should be able to access our application on http://argo.demo:32073/
+
+
+
+
+
+The codes related to argo-cd
+============================
+
+
+argo-app.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argo-demo-application
+  namespace: argocd
+spec:
+  destination:
+    namespace: argo-demo                          # destination namespace
+    server: https://kubernetes.default.svc        # default kubernetese cluster
+  project: default                                # project
+  source:
+    path: 17-combining-argo-tools/argo-rollouts                 # path of application rollouts manifests. If changes are detected they will be applied on the cluster
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git     # path to the argocd lab repo
+    targetRevision: main                                        # use main branch as source version. can be commit hash, tag or branch
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true                      # automated namespace creation
+    automated:                                    # automated sync
+      prune: true                                 # enable prune - delete application resources if no longer present in git
+      selfHeal: true                              # enable self-healing
+-------------------------------------------------
+
+
+
+
+
+Implementation of scenario
+==========================
+
+We can find all installation instruction here: https://github.com/entermix123/ArgoCD-Labs/blob/main/00-Install%20Guide/Kubernetes%20Kind%20ArgoCD%20Install%20Guide%20for%20Windows.txt
+
+We need to be logged in to
+	- ArgoCD
+	- Argo Workflows
+	- Argo Rollouts
+	- MinIO
+	- Nexus 
+
+ArgoCD
+------
+
+Find the password of ArgoCD
+	terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+	# result: password
+
+Open ArgoCD UI - https://argocd.localhost:32074
+	username: admin
+	password: password
+
+
+Argo Workflows
+--------------
+
+Access our Argo Worflows UI on https://argo-workflows.localhost:32074/
+
+
+
+Argo Rollouts
+-------------
+
+Open Argo Rollouts Dahsboard (Kargo) - http://rollouts.localhost:32073/
+
+
+
+MinIO
+-----
+
+Decode the username (rootUser) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootUser}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: username
+
+Decode the password (rootPassword) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootPassword}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: password
+
+Open and Login to MinIO - http://minio.localhost:32073/browser
+
+
+
+Nexus 
+-----
+
+Start Nexus service
+	terminal --> net start SonatypeNexusRepository
+
+Login to Nexus on http://localhost:8081/#login
+
+
+
+CREATING THE CI/CD PIPELINE
+---------------------------
+
+Before start creating the Ci/CD pipeline push all manifests to the repository!
+
+We will use namespace 'argo-events' for managing our resources.
+
+Set the default namespace
+	terminal --> k config set-context --current --namespace=argo-events
+
+Check the default namespace
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	*         kind-kind       kind-kind       kind-kind       argo-events	# current namespace
+
+
+
+Create ArgoCD application
+-------------------------
+
+Navigate to '17-combining-argo-tools\argo-cd' and apply the application argo-app.yaml
+	terminal --> k apply -f argo-app.yaml
+
+	# result: application.argoproj.io/argo-demo-application created
+
+We can test the application on http://argo.demo:32073/
+
+
+
+Start with workfloww resources
+------------------------------
+
+In folder '17-combining-argo-tools\argo-workflows' we have 4 manifests
+	- workflow.yaml - main workflwo
+	- clone-repo.yaml - task 1
+	- build-push.yaml - task 2
+	- update-manifest.yaml - task 3
+
+
+We need to create tasks workflows before submit our main workflow
+
+Create 'one-repo' workflow template
+	 terminal --> argo template create clone-repo.yaml -n argo-events
+	
+	# result:
+	Name:                clone-repo-wf-template
+	amespace:           argo-events
+	reated:             Wed Jan 14 19:50:23 +0200 (now)
+
+Create 'build-push' workflow template
+	 terminal --> argo template create build-push.yaml -n argo-events
+	
+	# result:
+	Name:                build-push-wf-template
+	Namespace:           argo-events
+	Created:             Wed Jan 14 19:51:32 +0200 (now)
+
+Create 'update-manifest' workflow template
+	 terminal --> argo template create update-manifest.yaml -n argo-events
+	
+	# result:
+	Name:                update-manifest-wf-template
+	Namespace:           argo-events
+	Created:             Wed Jan 14 19:52:06 +0200 (now)
+
+Confirm template creation
+	terminal --> argo template list -n argo-events
+
+	# result:
+	NAME
+	build-push-wf-template
+	clone-repo-wf-template
+	update-manifest-wf-template
+
+
+
+
+
+
+CHECK FIRST APPLICATION DEPLOYMENT
+----------------------------------
+
+Check if the application is running and is healthy on https://argocd.localhost:32074/applications
+
+We can check our application on http://argo.demo:32073/
+	
+Check Argo Rollouts Dashboards - http://rollouts.localhost:32073/rollouts/argo-demo
+	- We have visualized our rollout - 'nginx-rollouts'
+
+
+
+
+
+MAKE A CHANGE TO THE APPLICATION
+--------------------------------
+
+Make a small change in the app/index.html file and commit the changes
+Example:
+
+index.html
+-------------------------------------------------
+    <div class="container">
+        <h1>Welcome to My Website, Version 1.0.0</h1>
+    </div>
+-------------------------------------------------
+# from '1.0' to '1.0.0' - changed subversion
+
+
+
+SUBMIT THE MAIN WORKFLOW - TRIGGER THE UPDATE
+---------------------------------------------
+
+Go to 'argo-workflows' dir and submit the main workflow in the working namespace 'argo-events'
+	terminal --> argo submit workflows.yaml -n argo-events
+
+	# result:
+	Name:                argo-demo-9dv9l
+	Namespace:           argo-events
+	ServiceAccount:      unset (will run with the default ServiceAccount)
+	Status:              Pending
+	Created:             Thu Jan 15 09:52:14 +0200 (now)
+	Progress:
+	Parameters:
+	  repo-url:          https://github.com/entermix123/ArgoCD-Labs.git
+	  branch:            main
+	  nexus-registry:    host.docker.internal:8085
+
+
+
+Sinc ArgoCD application manually from the UI with "SYNC/SYCHRONIZE".
+
+The application will sync with the repository. The roolout will start and the tasks will execute one by one. If the tasks are successful, new image will be created and uploadd in the Nexus registry. The rollout will try to deploy 1 pod with this new image and if succeed we can test the application on http://argo.demo:32073/. We can refresh 6-7 times and atleast one time we should see the new message 'Welcome to My Website, Version 1.0.0'
+
+Promote the first step of the rollout manually with the UI or with CLI
+	terminal --> kargo promote nginx-rollouts -n argo-events
+
+	# result: rollout 'nginx-rollouts' promoted
+
+Once the new version application is fully deployed we can check it on http://argo.demo:32073/
+We should see message 'Welcome to My Website, Version 1.0.0'
+
+
+We can see the new image tag in Nexus registry.
+
+
+
+In the next session we will add Argo Events and we will not trigger update with submitting workflow manually but it will happens automatically.
+
+
+
