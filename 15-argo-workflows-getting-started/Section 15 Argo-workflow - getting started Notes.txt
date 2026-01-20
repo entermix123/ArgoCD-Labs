@@ -1,0 +1,686 @@
+Video link - https://www.youtube.com/watch?v=UgpVX5Sn5OI&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=14
+
+Video Agenda:
+
+00:00 Argo-workflows Overview
+03:48 Argo-workflows Setting-up
+19:03 Argo-workflows Templates In Practice
+
+Video Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+Prerequisites
+=============
+
+We should have atleast one running cluster:
+-------------------------------------------
+
+List clusters
+	terminal --> kubectl config get-clusters
+
+	# result: 
+	kind-kind
+	cluster2
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       			# current cluster
+
+We need to have installed Helm
+------------------------------
+
+We can find prerequisites installation instructions here - https://github.com/entermix123/ArgoCD-Labs/blob/main/00-Install%20Guide/Kubernetes%20Kind%20ArgoCD%20Install%20Guide%20for%20Windows.txt
+
+
+
+
+Argo-workflows Overview
+=======================
+
+Argo Workflows is open source container native engine for orchestrating parallel jobs in Kubernetes. Argo Workflows is implemented as Kubernetes CRD (Custom Resource Definition).
+
+USES CASES
+----------
+Most common use cases are Infrastructure automation, Machine Leanrning and CI/CD.
+
+One of the most popular use cases in Argo Workflows is CI/CD. In CI/CD we can define multiple steps and these steps have specific tasks - building and testing our applications. These steps can be run in parallel or based on dependancies.
+
+Example: We have step A, B and C. If step A is completed, step B and C are executed in sequential. So we define 3 steps and these steps can be ran in parallel or based on dependancies.
+
+Official Argo Workflow example - https://github.com/argoproj/argo-workflows/blob/main/examples/ci.yaml
+	- 2 steps that run sequentially - test and build
+
+
+
+ci.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  labels:
+    workflows.argoproj.io/no-test: "environment"
+  generateName: ci-example-
+spec:
+  # entrypoint is the name of the template used as the starting point of the workflow
+  entrypoint: ci-example
+  # the 'ci-example' template accepts a parameter 'revision', with a default of 'cfe12d6'.
+  # this can be overridden via argo CLI (e.g. `argo submit ci.yaml -p revision=0dea2d0`)
+  arguments:
+    parameters:
+    - name: revision
+      value: cfe12d6
+  # a temporary volume, named workdir, will be used as a working directory
+  # for this workflow. This volume is passed around from step to step.
+  volumeClaimTemplates:
+  - metadata:
+      name: workdir
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi
+
+  templates:
+  - name: ci-example
+    inputs:
+      parameters:
+      - name: revision
+    steps:                                                          # steps
+    - - name: build                                                 # build step
+        template: build-golang-example
+        arguments:
+          parameters:
+          - name: revision
+            value: "{{inputs.parameters.revision}}"
+    # the test step expands into three parallel steps running
+    # different operating system images. each mounts the workdir
+    # and runs the compiled binary from the build step.
+    - - name: test                                                  # test step
+        template: run-hello
+        arguments:
+          parameters:
+          - name: os-image
+            value: "{{item.image}}:{{item.tag}}"
+        withItems:
+        - { image: 'debian', tag: '9.1' }
+        - { image: 'alpine', tag: '3.6' }
+        - { image: 'ubuntu', tag: '17.10' }
+
+  - name: build-golang-example
+    inputs:
+      parameters:
+      - name: revision
+      artifacts:
+      - name: code
+        path: /go/src/github.com/golang/example
+        git:
+          repo: https://github.com/golang/example.git
+          revision: "{{inputs.parameters.revision}}"
+    container:
+      image: golang:1.8
+      command: [sh, -c]
+      args: ["
+        cd /go/src/github.com/golang/example/hello &&
+        git status &&
+        go build -v .
+      "]
+      volumeMounts:
+      - name: workdir
+        mountPath: /go
+
+  - name: run-hello
+    inputs:
+      parameters:
+      - name: os-image
+    container:
+      image: "{{inputs.parameters.os-image}}"
+      command: [sh, -c]
+      args: ["
+        uname -a ;
+        cat /etc/os-release ;
+        /go/src/github.com/golang/example/hello/hello
+      "]
+      volumeMounts:
+      - name: workdir
+        mountPath: /go
+-------------------------------------------------
+
+
+
+
+
+
+
+Argo-workflows Setting-up
+=========================
+
+Before setting up Argo Workflows we should go true official Argo Workflow documentation for 'Quick Start' 
+	- https://argo-workflows.readthedocs.io/en/latest/quick-start/
+
+
+
+INSTALL ARGO WORKFLOWS WITH HELM
+--------------------------------
+
+This is the official repo for Argo Workflows Helm chart 
+	- https://github.com/argoproj/argo-helm/tree/main/charts/argo-workflows
+
+We are going to use ingress controller so we need to modify values.yaml file used with the chart.
+	- Open the values.yaml - https://github.com/argoproj/argo-helm/blob/main/charts/argo-workflows/values.yaml
+	- Search for 'server' and on line 514 we can find the section. On line 686 we can find 'ingress' subsection.
+		- The 'ingress' controller functionality is disabled by default
+
+
+We will overwrite needed fields for this section in our local argo-workflows-values.yaml file and use it to deploy the Argo Workflow Chart.
+
+We also add field 'extraArgs:' to manage authentication mode from '--auth-mode=client' (default) to '--auth-mode=server'. 
+This will avoid requirements for bearer authentication token when we connect to Argo Workflows.
+We can also overwrite and use 'server/NodePort' section for external access (not in this case).
+
+
+argo-workflows-values.yaml
+-------------------------------------------------
+server:
+  # -- Extra arguments to provide to the Argo server binary.
+  ## Ref: https://argo-workflows.readthedocs.io/en/stable/argo-server/#options
+  extraArgs:
+    - --auth-mode=server
+  
+  # Argo Workflows server ingress configuration
+  ingress:
+    # -- Enable an ingress resource for the Argo Workflows server
+    enabled: true
+
+    # -- Defines which ingress controller will implement the resource
+    ingressClassName: nginx
+
+    # -- Argo Workflows server hostname
+    hostname: "argo-workflows.localhost"
+-------------------------------------------------
+
+
+Create 'argo' namespace in our cluster
+	terminal --> k create ns argo
+
+	# result: namespace/argo created
+
+Add Argo repository to our system
+	terminal --> helm repo add argo https://argoproj.github.io/argo-helm
+
+Confirm repo addition
+	terminal --> helm repo list
+
+	# result:
+	NAME    URL
+	argo    https://argoproj.github.io/argo-helm
+
+
+Deploy Argo Workflows Helm Chart
+	terminal --> helm install my-workflow argo/argo-workflows -n argo -f argo-workflows-values.yaml
+
+	# helm 					- common helm command
+	# install				- action
+	# my-workflow				- object name
+	# argo/argo-workflows			- used chart
+	# -n argo				- destination namespace
+	# -f argo-workflows-values.yaml		- use argo-workflows-values.yaml custom values
+
+	# result:
+	NAME: my-workflow
+	LAST DEPLOYED: Thu Jan  8 14:02:07 2026
+	NAMESPACE: argo
+	STATUS: deployed
+	REVISION: 1
+	DESCRIPTION: Install complete
+	TEST SUITE: None
+
+
+List resources deployed in 'argo' namespace
+	terminal --> k get all -n argo
+
+	# result:
+	NAME                                                                  READY   STATUS    RESTARTS   AGE
+	pod/my-workflow-argo-workflows-server-58dd98f67-pnj6f                 1/1     Running   0          16m
+	pod/my-workflow-argo-workflows-workflow-controller-58864d5898-vvspv   1/1     Running   0          16m
+
+	NAME                                        TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
+	service/my-workflow-argo-workflows-server   ClusterIP   10.96.23.4   <none>        2746/TCP   16m
+
+	NAME                                                             READY   UP-TO-DATE   AVAILABLE   AGE
+	deployment.apps/my-workflow-argo-workflows-server                1/1     1            1           16m
+	deployment.apps/my-workflow-argo-workflows-workflow-controller   1/1     1            1           16m
+
+	NAME                                                                        DESIRED   CURRENT   READY   AGE
+	replicaset.apps/my-workflow-argo-workflows-server-58dd98f67                 1         1         1       16m
+	replicaset.apps/my-workflow-argo-workflows-workflow-controller-58864d5898   1         1         1       16m
+
+
+Create rolebinding for admin role in 'argo' namespace
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo:default -n argo
+
+	# result: rolebinding.rbac.authorization.k8s.io/default-admin created
+
+
+Add host address to Windows host list
+	- Open PowerShell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 argo-workflows.localhost'
+		- save the file and exit
+
+Add host address to Linux host list
+	terminal --> sudo vim /etc/hosts
+	- Add '127.0.0.1 argo-workflows.localhost'
+	- save changes and exit - escape, :wq!, enter
+
+
+We can now access our Argo Workflows UI on https://argo-workflows.localhost:32074/
+
+
+
+
+
+INSTALL ARGO WORKFLOW MANUALLY
+------------------------------
+
+We need to uninstall any other Argo Workflow installation to proceed with this instruction.
+
+Create 'argo' namespace for Argo Workflows
+	terminal --> k create ns argo
+
+	# result: namespace/argo created
+
+Deploy Argo Workflows manifests
+	terminal --> kubectl apply -n argo -f https://github.com/argoproj/argo-workflows/releases/latest/download/install.yaml
+
+	# result:
+	customresourcedefinition.apiextensions.k8s.io/clusterworkflowtemplates.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/cronworkflows.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workflowartifactgctasks.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workfloweventbindings.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workflows.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workflowtaskresults.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workflowtasksets.argoproj.io created
+	customresourcedefinition.apiextensions.k8s.io/workflowtemplates.argoproj.io created
+	serviceaccount/argo created
+	serviceaccount/argo-server created
+	role.rbac.authorization.k8s.io/argo-role created
+	clusterrole.rbac.authorization.k8s.io/argo-aggregate-to-admin created
+	clusterrole.rbac.authorization.k8s.io/argo-aggregate-to-edit created
+	clusterrole.rbac.authorization.k8s.io/argo-aggregate-to-view created
+	clusterrole.rbac.authorization.k8s.io/argo-cluster-role created
+	clusterrole.rbac.authorization.k8s.io/argo-server-cluster-role created
+	rolebinding.rbac.authorization.k8s.io/argo-binding created
+	clusterrolebinding.rbac.authorization.k8s.io/argo-binding created
+	clusterrolebinding.rbac.authorization.k8s.io/argo-server-binding created
+	configmap/workflow-controller-configmap created
+	service/argo-server created
+	priorityclass.scheduling.k8s.io/workflow-controller created
+	deployment.apps/argo-server created
+	deployment.apps/workflow-controller created
+
+
+Confirm successfull installation
+	terminal --> k get all -n argo
+
+	# result:
+	NAME                                      READY   STATUS    RESTARTS   AGE
+	pod/argo-server-744f7588b8-tnqh4          1/1     Running   0          52s
+	pod/workflow-controller-6c84fcfb6-d2f9l   1/1     Running   0          52s
+
+	NAME                  TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+	service/argo-server   ClusterIP   10.96.232.144   <none>        2746/TCP   52s
+
+	NAME                                  READY   UP-TO-DATE   AVAILABLE   AGE
+	deployment.apps/argo-server           1/1     1            1           52s
+	deployment.apps/workflow-controller   1/1     1            1           52s
+
+	NAME                                            DESIRED   CURRENT   READY   AGE
+	replicaset.apps/argo-server-744f7588b8          1         1         1       52s
+	replicaset.apps/workflow-controller-6c84fcfb6   1         1         1       52s
+
+
+Set ingress resource for permanent access without port forwarding for test purposes
+
+
+argo-workflows-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-workflows
+  namespace: argo
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: argo-workflows.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-server
+            port:
+              number: 2746
+-------------------------------------------------
+
+Deploy the argo-workflows-ingress.yaml resource
+	terminal --> k apply -f argo-workflows-ingress.yaml
+
+	# result: ingress.networking.k8s.io/argo-workflows created
+
+
+Patch the argo workflow server to avoid authentication (NOT FOR PRODUCTION !)
+	shell terminal --> kubectl patch deployment argo-server -n argo --type='json' -p='[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value": ["server", "--auth-mode=server"]}]'
+
+	# result: deployment.apps/argo-server patched
+
+
+Add host address to Windows host list
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 argo-workflows.localhost'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim etc/hosts
+	- Add '127.0.0.1 argo-workflows.localhost'
+	- save changes and exit - escape, :wq!, enter
+
+
+We can now access our Argo Worflows UI on https://argo-workflows.localhost:32074/
+
+
+
+
+
+INSTALL ARGO CLI
+----------------
+
+1. Download latest version from the official repository:
+	- Go to official Argo CLI repo - and download latest stable version - https://github.com/argoproj/argo-workflows/releases
+	- Extract it in Downloads folder (you'll get argo-windows-amd64 file)
+	- Move the file to C://Users/username					# fix the username
+
+2. Rename the file 
+	terminal --> Rename-Item -Path "C:\Users\username\argo-windows-amd64.exe" -NewName "argo.exe"	
+	
+	# fix the username
+
+
+2. Add to PATH with PowerShell
+	- Run PowerShell as Administrator, fix your username path and execute the command
+		terminal --> [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\username", "User")
+
+	# fix the folder path ";C:\Users\username\bin" - set correct username
+
+3. Restrat shell and verify Argo CLI installation
+	terminal --> argo version
+
+	# result:
+	argo: v4.0.0-rc2
+  	BuildDate: 2025-12-22T16:07:52Z
+  	GitCommit: 5f7c7ec6f5f6d6589a2c0cbc20acd79ca078f76f
+  	GitTreeState: clean
+  	GitTag: v4.0.0-rc2
+  	GoVersion: go1.24.11
+  	Compiler: gc
+  	Platform: windows/amd64
+
+
+
+
+
+IMPORTANT FOR ARGO WORKFLOWS FEATURES
+-------------------------------------
+
+The most important object for argo workflows is serviecc account. 
+
+In order dor argo to support features such as artifacts, outputs, access, secrets, it needs to communicate with Kubernetes resources using Kubernetes API. To communicate with Kubernetes API Argo uses service account to authenticate itself to the Kubernetes API. We can specify which role or which permissions the service account that Argo uses by binding a role to this service account using a rolebinding object. Then when submitting or executing workflows we can specify which service account Argo uses. When no service account is provided Argo will use the default user account from the namespace from which is ran (which almost always have insufficient privileges by default).
+
+
+Grant Argo CLI admin permissions
+--------------------------------
+
+List service accounts
+	terminal --> k get sa -n argo
+
+	# result:
+	NAME                                             SECRETS   AGE
+	default                                          0         118m
+	my-workflow-argo-workflows-server                0         92m
+	my-workflow-argo-workflows-workflow-controller   0         92m
+
+
+Create rolebinding for admin role
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo:default -n argo
+
+		# k 					- common kubectl command
+		# create				- action
+		# rolebinding				- object
+		# default-admin				- object name
+		# --clusterrole=admin			- used cluster role
+		# --serviceaccount=argo:default		- target service account <namespcae>:<useraccount>
+		# -n argo				- target namespace
+	
+	
+	# result: rolebinding.rbac.authorization.k8s.io/default-admin created
+
+
+We granted admin privileges of argo default service account in argo namespace.
+
+Argo will use this service account for executing workflows and communicating with the Kubernetes API.
+
+
+
+
+
+
+
+
+
+Argo-workflows Templates In Practice
+====================================
+
+Workflow spec
+	- list of templates - Chain of functions. Each function contains instructions.
+	- entrypoint - main function (first executed template)
+
+
+Templates types
+---------------
+
+We have 6 different types tempates in Argo Workflows in 2 different categories.
+
+Category: TEMPLATE DEFINITIONS - work definitions (ususally in a container)
+	- container - most common template spec (same as Kubernetes container spec)
+	- script - wrapper around the container. Same as a container spec but adds the source field which allows us to define a script in place. For example we can set a python script to do tasks.
+	- resource - performs operations on cluster resource directly. Used to get, create, apply, delete, replace or patch resources on our cluster. 
+	- suspend - suspend execution for a configured duration or resumed manually. Example: we can pause the workflow for 20s.
+
+Category: TEMPLATE INVOCATORS - used to call other templates and provide execution control
+	- steps template - allows us to define our tasks in series of steps. We can execute these steps in parallel or based on dependancies.
+	- dag template - allows us to define our tasks as graph of dependancies. In a dag we configure the exact order of consequent tasks execution. Takss without any dependancies will run immediately.
+
+
+
+FIRTS WORKFLOW
+--------------
+
+In this template are included all of the templates we commented above.
+
+templates.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-wf-       # Name of this Workflow (generated - will be used multiple times in different contexts)
+spec:
+  entrypoint: dag-template                       # Defines "dag-template" as the "main" template
+  templates:
+  - name: dag-template 
+  # Defining the "dag template" as a Template Invocator, You must use one of "dag" or "steps" as a template invocator
+    dag:
+      tasks:
+        - name: A
+          template: container-template    # main task - entrypoint
+        - name: B
+          template: script-template
+          dependencies: [A]               # executed after task A
+        - name: C
+          template: resource-template
+          dependencies: [A]               # also executed after task A - in parallel with task B
+        - name: D
+          template: delay-template        # executed after task B and C
+          dependencies: [B, C]
+# - name: steps-template # Defining the "steps template" as a Template Invocator, You must use one of "dag" or "steps" as a template invocator
+#   steps:                # on each step we invoke specific template. Each step start after the prevous one is completed
+#   - - name: step1
+#       template: container-template
+#   - - name: step2a      # step2a have double dash (main outer list object in the steps) step2a and step2b run in parallel
+#       template: script-template
+#     - name: step2b      # step2b have single dash (inner object in the specific step) step2a and step2b run in parallel
+#       template: resource-template
+#   - - name: step3
+#       template: delay-template
+
+
+  - name: container-template                 # Defining the "container template" as a Template Definition
+    container:
+      image: alpine
+      command: ["/bin/sh", "-c"]
+      args: ["echo Hello from container template"]
+  - name: script-template                    # Defining the "script template" as a Template Definition
+    script:
+      image: python:alpine3.6
+      command: [python]
+      source: |
+        import random
+        i = random.randint(1, 100)
+        print(i)
+  - name: resource-template                 # Defining the "resource template" as a Template Definition
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          generateName: argo-wf-resource-template-cm-          # generating the name with this prefix
+        data:
+          created_by: argo-workflows
+  - name: delay-template                    # Defining the "delay template" as a Template Definition
+    suspend:
+      duration: "20s"
+-----------------------------------------------
+
+Submit the template in the 'argo' namespace
+	terminal --> argo submit templates.yaml -n argo
+
+	# result:
+	Name:                argo-wf-ntxdw
+	Namespace:           argo
+	ServiceAccount:      unset (will run with the default ServiceAccount)
+	Status:              Pending
+	Created:             Sun Jan 11 09:49:21 +0200 (now)
+	Progress:
+
+
+Access our Argo Worflows UI on https://argo-workflows.localhost:32074/
+Specifu the namepsace 'argo' in the left menu and the workflow ill appear.
+When we open the workflow we can see that the tasks are executed in the order we configured.
+
+We can see the logs of each step. 
+
+For example we configured log print in the container template - step A.
+Open step A and go to Logs we can see the message we set - 'Hello from container template'
+
+We can see the random generated number in step B by opening the logs.
+
+We can check if the comfigmap we configured to be created in step D is present on the cluster
+	terminal --> k get cm -n argo
+
+	# result:
+	NAME                                                       DATA   AGE
+	argo-wf-resource-template-cm-f7j5s                         1      17m	# the configmap is created
+
+	Delete the configmap to clean the 'argo' namespace of external objects
+		terminal --> k delete cm argo-wf-resource-template-cm-f7j5s -n argo
+
+		# result: configmap "argo-wf-resource-template-cm-f7j5s" deleted from argo namespace
+
+
+
+CLEAN 'ARGO' NAMESPACE
+----------------------
+
+List workflows in argo namespace
+	terminal --> kubectl get workflows -n argo
+
+	# result:
+	NAME            STATUS      AGE   MESSAGE
+	argo-wf-ntxdw   Succeeded   40m
+
+Delete the workflow from argo namespace
+	terminal --> k delete workflow argo-wf-ntxdw -n argo
+
+	# result: workflow.argoproj.io "argo-wf-ntxdw" deleted from argo namespace
+
+
+
+
+DIFFERENCES BETWEEN 'steps-template' and 'dag-template'
+-------------------------------------------------------
+
+steps-template
+--------------
+	- Mental model: "Do this, then do these in parallel, then do that"
+
+
+dag-template
+------------
+	- Mental model: "Here are all tasks and their relationships"
+
+
+Aspect				steps						dag
+----------------------------------------------------------------------------------------------------------
+Dependency expression		Implicit (by position)				Explicit (by name)
+----------------------------------------------------------------------------------------------------------
+Readability for simple flows	More intuitive					More verbose
+----------------------------------------------------------------------------------------------------------
+Readability for complex flows	Can get confusing				Clearer relationships
+----------------------------------------------------------------------------------------------------------
+Flexibility			Limited by sequential structure			Can express any dependency graph
+----------------------------------------------------------------------------------------------------------
+Use case			Linear/pipeline workflows			Complex branching workflows
+
+
+When to use which?
+------------------
+Use steps when:
+	- We have a simple, mostly linear pipeline
+	- Natural progression: setup → process → cleanup
+	- You prefer compact syntax
+
+Use dag when:
+	- We have complex dependencies (diamond patterns, fan-in/fan-out)
+	- Tasks have multiple dependencies
+	- We want explicit clarity about what depends on what
+	- We might need to modify dependencies later
+
+
+
+
+
+
+
