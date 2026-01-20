@@ -1,0 +1,995 @@
+Video link - https://www.youtube.com/watch?v=q1pMzZE8Ugw&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=12
+
+Video Agenda:
+
+00:00 Overview Of The Blue-green Deployment Strategy
+00:12:45 Introduction To The Scenario
+00:21:50 Implementing The Blue-green Deployment Strategy
+
+Video Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+Prerequisites
+=============
+
+We should have atleast one running cluster:
+-------------------------------------------
+
+List clusters
+	terminal --> kubectl config get-clusters
+
+	# result: 
+	kind-kind
+	cluster2
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       			# current cluster
+
+
+We should have installed Argo Rollouts 
+--------------------------------------
+Section 11. Install Argo Rollouts on main cluster from the installtion guide below
+
+
+We can find prerequisites installation instructions here - https://github.com/entermix123/ArgoCD-Labs/blob/main/00-Install%20Guide/Kubernetes%20Kind%20ArgoCD%20Install%20Guide%20for%20Windows.txt
+
+
+
+
+How argo rollouts work?
+-----------------------
+	- Similar to deployment objects, the argo rollouts controller will manage the creation, scaling and deletion of replica sets. This replica sets are defined by the spec.template field inside the rollout resource which uses the same pod template as the native kubernetes deployment object.
+
+
+
+Overview Of The Blue-green Deployment Strategy
+==============================================
+
+We will go over blue-green strategy called rollout.yaml.
+
+Once that the new relica set is scaled up, the controller will mark it as stable. We are using blue-green strategy for this rollout. If cgange any item under spec.template field, a new replica set will be created. For example if we change the name or the tag of the image - (spec.containers.name or spec.containers.name.image) or if we decide to change a name of one of the environment variables (spec.containers.name.env.name) a new replica set will be created.
+
+
+rollout.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout                                       # specific manifest type
+metadata:
+  name: blue-green-deployment                       # name of the manifest
+spec:
+  replicas: 4                                       # replica count
+  selector:
+    matchLabels:
+      app: blue-green-deployment                    # label selector
+  template:                                         # pod template
+    metadata:
+      labels:
+        app: blue-green-deployment                  # match the name of the rollout
+    spec:
+      containers:
+      - name: blue-green                            # application name
+        image: blue-green                           # image name
+        imagePullPolicy: Never                      # don't pull the image because we have them locally
+        env:
+        - name: html_name                           # name of environment variable
+          value: "app-v1.html"                      # value of environment variable
+        ports:
+        - containerPort: 5000                       # container port
+  strategy:
+    blueGreen:                                                # blue-green strategy
+      activeService: rollout-bluegreen-active                 # active service
+      previewService: rollout-bluegreen-preview               # preview service
+      autoPromotionEnabled: false
+      # abortScaleDownDelaySeconds: 10
+      # autoPromotionEnabled: false
+      # scaleDownDelaySeconds: 60
+      # previewReplicaCount: 2
+      # autoPromotionSeconds: 20
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-active                              # name of the active service
+spec:
+  selector:
+    app: blue-green-deployment                                # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-preview                            # name of the preview service
+spec:
+  selector:
+    app: blue-green-deployment                               # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+-----------------------------------------------
+
+
+Blue-Green strategy explained
+-----------------------------
+We have two different servics - active svc and preview svc. We have a rollout for the application. In this rollout we use "labels: app: blue-green-deployment" and "image: blue-green:v1". This is the spec of our application. The two services (active & preview) point at our rollout. The services are using selectors like in the application spec.
+
+After time we decide to deploy our new application, an item in section spec.template is changed and new replica set is created. For example we change "image.name: blue-green:v1" to  "image.name: blue-green:v2". In this time active service is pointing to "v1" and preview service is pointing to "v2". The rollout manage service pointing true replica set hash. The rollout controller ensures proper trafic rauting by injecting a unique hash to the replica set to the service's selectors. Argo rollout controller modify service's selector and add a new selector. The new service's selectors are similar to "pod-template-hash: XXXXXX".
+
+If we want our users to use the second version of our application, we can promote the rollout. If we promote the rollout, argo-rollouts controller will modify the selecotr related to the active service and replace it with the hash of the preview service. This mean that both services point at the second version of our application.
+
+
+
+
+Introduction To The Scenario
+============================
+
+We will use two different applications in folder '12-argo-rollouts-blue-green\blue-green-app\templates':
+	- termplates/app-v1.html 
+	- termplates/app-v2.html
+
+termplates/app-v1.html 
+-----------------------------------------------
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Blue-Sky Background - Version 1</title>
+    <style>
+        body {
+            background-color: skyblue;
+        }
+        
+        .version {
+            font-size: 40px;
+            text-align: center;
+            margin-top: 200px;
+            color: white;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div class="version">Argo-Rollouts Course by DevOps Hobbies</div>
+    <div class="version">Version 1</div>
+</body>
+</html>
+-----------------------------------------------
+
+
+termplates/app-v2.html 
+-----------------------------------------------
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Green Background - Version 2</title>
+    <style>
+        body {
+            background-color: green;
+        }
+        
+        .version {
+            font-size: 40px;
+            text-align: center;
+            margin-top: 200px;
+            color: white;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div class="version">Argo-Rollouts Course by DevOps Hobbies</div>
+    <div class="version">Version 2</div>
+</body>
+</html>
+-----------------------------------------------
+
+
+Flask application configuration blue-green.py:
+
+blue-green.py
+-----------------------------------------------
+from os import environ
+from flask import Flask, render_template
+app = Flask(__name__)
+ 
+@app.route('/')
+def home():
+   return render_template(environ['html_name'])
+if __name__ == '__main__':
+   app.run()
+-----------------------------------------------
+
+Evironment requirements:
+
+requirements.txt
+-----------------------------------------------
+blinker==1.6.2
+click==8.1.7
+flask==3.0.0
+importlib-metadata==6.8.0
+itsdangerous==2.1.2
+Jinja2==3.1.2
+MarkupSafe==2.1.3
+werkzeug==3.0.0
+zipp==3.17.0
+-----------------------------------------------
+
+
+We have ready to use Dockerrfile for this applications to be created as image. We will create one image. The image will contain both applications in it and we will control which application will be used by changing the environment variable 'html_name' in the rollout manifest.
+
+We have to be in folder with the Dockerfile - 12-argo-rollouts-blue-green\blue-green-app
+
+Dockerfile
+-----------------------------------------------
+FROM python:3.8-slim-buster
+WORKDIR /devops-hobbies
+ENV FLASK_APP=blue-green.py
+COPY requirements.txt . 
+RUN pip3 install -r requirements.txt
+COPY blue-green.py .
+COPY templates ./templates
+CMD ["flask", "run", "--host=0.0.0.0"]
+-----------------------------------------------
+
+Create the two images
+	terminal --> docker build -t blue-green .
+
+Confirm image creation
+	terminal --> docker image list
+
+
+We will go over the rollout and service manifests in folder '12-argo-rollouts-blue-green\blue-green-manifests'
+	- rollout.yaml
+	- ingress.yaml
+
+
+rollout.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout                                       # specific manifest type
+metadata:
+  name: blue-green-deployment                       # name of the manifest
+spec:
+  replicas: 4                                       # replica count
+  selector:
+    matchLabels:
+      app: blue-green-deployment                    # label selector
+  template:                                         # pod template
+    metadata:
+      labels:
+        app: blue-green-deployment                  # match the name of the rollout
+    spec:
+      containers:
+      - name: blue-green                            # application name
+        image: blue-green                           # image name
+        imagePullPolicy: Never                      # don't pull the image because we have them locally
+        env:
+        - name: html_name                           # name of environment variable
+          value: "app-v1.html"                      # value of environment variable
+        ports:
+        - containerPort: 5000                       # container port
+  strategy:
+    blueGreen:                                                # blue-green strategy
+      activeService: rollout-bluegreen-active                 # active service
+      previewService: rollout-bluegreen-preview               # preview service
+      autoPromotionEnabled: false
+      # abortScaleDownDelaySeconds: 10
+      # autoPromotionEnabled: false
+      # scaleDownDelaySeconds: 60
+      # previewReplicaCount: 2
+      # autoPromotionSeconds: 20
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-active                              # name of the active service
+spec:
+  selector:
+    app: blue-green-deployment                                # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-preview                            # name of the preview service
+spec:
+  selector:
+    app: blue-green-deployment                               # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+-----------------------------------------------
+
+Autopromotion is disabled for the example. by default autopromotion is enabled.
+
+
+ingress.yaml
+-----------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: blue-green-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: blue-green.demo                         # domain name of the host
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rollout-bluegreen-active        # ingress controller is pointing at the active service
+            port:
+              number: 5000
+-----------------------------------------------
+
+
+
+
+We need to set our domain name host on our OS
+
+Steps to Configure Hosts File on Windows:
+-----------------------------------------
+
+1. Open Hosts File as Administrator
+PowerShell (Run as Administrator):
+-----------------------------------------------
+terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+```
+
+**Or manually:**
+- Navigate to: `C:\Windows\System32\drivers\etc\`
+- Right-click `hosts` → Open with → Notepad (as Administrator)
+
+### 2. Add This Line at the End
+```
+127.0.0.1    blue-green.demo
+-----------------------------------------------
+
+3. Save changes and close the file
+
+4. Flush DNS Cache (Optional but Recommended) with shell as administrator
+	terminal --> ipconfig /flushdns
+
+	# result:
+	Windows IP Configuration
+
+	Successfully flushed the DNS Resolver Cache.
+
+
+
+Steps to Configure Hosts File on Linux:
+---------------------------------------
+
+1. Open dns hosts config
+	terminal --> sudo vim /etc/hosts
+
+2. Add the configuration
+-------------------------------
+127.0.0.1    blue-green.demo
+-------------------------------
+
+3. Save Changes
+
+Press Esc to exit insert mode
+Type :wq (not :wq! - the ! is unnecessary for saving this file)
+Press Enter
+
+4. Verify the Change (Optional)
+	terminal --> cat /etc/hosts | grep blue-green
+
+
+
+
+
+
+
+
+Implementing The Blue-green Deployment Strategy
+===============================================
+
+
+Add the created images to our clusters
+--------------------------------------
+
+In the working shell terminal (different from kargo dashboard) we proceed with the next steps:
+
+List clusters
+	terminal --> kind get clusters
+
+	# result:
+	cluster2
+	kind
+
+Load images to any exsiting clusters - 'kind' and 'external'
+	terminal --> kind load docker-image blue-green --name kind
+	terminal --> kind load docker-image blue-green --name cluster2
+
+
+
+We will use rollout.yaml file to deply aour first application.
+
+rollout.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout                                       # specific manifest type
+metadata:
+  name: blue-green-deployment                       # name of the manifest
+spec:
+  replicas: 4                                       # replica count
+  selector:
+    matchLabels:
+      app: blue-green-deployment                    # label selector
+  template:                                         # pod template
+    metadata:
+      labels:
+        app: blue-green-deployment                  # match the name of the rollout
+    spec:
+      containers:
+      - name: blue-green                            # application name
+        image: blue-green                           # image name
+        imagePullPolicy: Never                      # don't pull the image because we have them locally
+        env:
+        - name: html_name                           # name of environment variable
+          value: "app-v1.html"                      # value of environment variable
+        ports:
+        - containerPort: 5000                       # container port
+  strategy:
+    blueGreen:                                                # blue-green strategy
+      activeService: rollout-bluegreen-active                 # active service
+      previewService: rollout-bluegreen-preview               # preview service
+      autoPromotionEnabled: false
+      # abortScaleDownDelaySeconds: 10
+      # autoPromotionEnabled: false
+      # scaleDownDelaySeconds: 60
+      # previewReplicaCount: 2
+      # autoPromotionSeconds: 20
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-active                              # name of the active service
+spec:
+  selector:
+    app: blue-green-deployment                                # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-preview                            # name of the preview service
+spec:
+  selector:
+    app: blue-green-deployment                               # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+-----------------------------------------------
+
+Create 'bue-green' namespace
+	terminal --> k create ns blue-green
+
+	# result: namespace/blue-green created
+
+Apply the rollout in the created 'bue-green' namespace
+	terminal --> k apply -f rollout.yaml -n blue-green
+
+	# result: 
+	rollout.argoproj.io/blue-green-deployment created
+	service/rollout-bluegreen-active created
+	service/rollout-bluegreen-preview created
+
+Confirm running pods
+	terminal --> k get all -n blue-green
+
+	# result:
+	NAME                                         READY   STATUS    RESTARTS   AGE
+	pod/blue-green-deployment-6ff95b6564-9cvc8   1/1     Running   0          32s
+	pod/blue-green-deployment-6ff95b6564-nrlr7   1/1     Running   0          32s
+	pod/blue-green-deployment-6ff95b6564-qf92z   1/1     Running   0          32s
+	pod/blue-green-deployment-6ff95b6564-sm4fc   1/1     Running   0          32s
+
+	NAME                                TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+	service/rollout-bluegreen-active    ClusterIP   10.96.114.237   <none>        5000/TCP   32s
+	service/rollout-bluegreen-preview   ClusterIP   10.96.38.116    <none>        5000/TCP   32s
+
+	NAME                                               DESIRED   CURRENT   READY   AGE
+	replicaset.apps/blue-green-deployment-6ff95b6564   4         4         4       32s
+
+
+
+Start Kargo Dashboard
+---------------------
+We have to start argo rollouts dashboard. We can find Kargo (kubectl-argo-rollouts) installation instruction in section "11 - Argo-rollouts overview & installation/Argo-rollouts Installation"
+
+In new shell terminal tart kargo dashboard 
+Login into ArgoCD CLI
+	terminal --> argocd login argocd.localhost:32074 --insecure --grpc-web --username admin --password Tip-kdHFNljqdnq3
+	or
+	Access the ArgoCD UI on https://argocd.localhost:32074
+
+Open Kargo Dashoboard - http://rollouts.localhost:32073/ and List 'blue-green' namespace from the top right drop down menu.
+
+In Kargo Dahsboard we can see one deployment named 'blue-green-deployment' with 4 replicas as configured in the rollout.yaml.
+
+
+
+
+We will now create ingress service with ingress.yaml manifest file
+
+ingress.yaml
+-----------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: blue-green-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: blue-green.demo                         # domain name of the host
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rollout-bluegreen-active        # ingress controller is pointing at the active service
+            port:
+              number: 5000
+-----------------------------------------------
+
+Create the service in 'blue-green' namespace
+	terminal --> k apply -f ingress.yaml -n blue-green
+
+	# result: ingress.networking.k8s.io/blue-green-ingress created
+
+
+Steps to Configure Hosts File on Windows:	IF NOT DONE
+-----------------------------------------
+1. Open Hosts File as Administrator
+PowerShell (Run as Administrator):
+-----------------------------------------------
+terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+```
+
+**Or manually:**
+- Navigate to: `C:\Windows\System32\drivers\etc\`
+- Right-click `hosts` → Open with → Notepad (as Administrator)
+
+### 2. Add This Line at the End
+```
+127.0.0.1    blue-green.demo
+-----------------------------------------------
+
+3. Save changes and close the file
+
+4. Flush DNS Cache (Optional but Recommended) with shell as administrator
+	terminal --> ipconfig /flushdns
+
+	# result:
+	Windows IP Configuration
+
+	Successfully flushed the DNS Resolver Cache.
+
+Access blue-green application on http://blue-green.demo:32073/
+
+
+IMPORTANT
+=========
+
+EXPLOANATION ABOUT DOCKER KUBERNETES KIND CLUSTERS COMMUNICATION
+
+Our main (local) cluster is serving ArgoCD and Kargo Dashboard. Its configuration is as follow:
+
+kind-config-nginx.yaml
+-------------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 32073				# this is HTTP
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 32074				# this is HTTPS
+    protocol: TCP
+- role: worker
+- role: worker
+-------------------------------------------------
+
+ArgoCD requires TLS/HTTPS communication and we access it on port 32074 - https://argocd.localhost:32074/applications
+Kargo Dashboard requires HTTP communication and we access it on port 32073 - http://rollouts.localhost:32073/rollouts/
+
+All configured host addresses in C:\Windows\System32\drivers\etc\hosts connected with our cluster application are accessed on port 32073 or 32074 (for local cluster) depending of on which tool we are looking at them (ArgoCD or Kargo) with.
+
+127.0.0.1 argocd.localhost			# this use HTTPS - 32074
+127.0.0.1 rollouts.localhost			# this use HTTP - 32073
+127.0.0.1 blue-green.demo			# Argo rollout - Kargo Dashboard use HTTP - 32073
+
+
+
+List replica sets in 'blue-green' namespace
+	terminal --> k get rs -n blue-green
+	
+	# result:
+	NAME                               DESIRED   CURRENT   READY   AGE
+	blue-green-deployment-6ff95b6564   4         4         4       67m	# we have one replicaset with its hash
+
+List services in 'blue-green' namespace
+	terminal --> k get svc -n blue-green
+
+	# result:
+	NAME                        TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE	# we have two services
+	rollout-bluegreen-active    ClusterIP   10.96.88.102   <none>        5000/TCP   68m	# active
+	rollout-bluegreen-preview   ClusterIP   10.96.105.79   <none>        5000/TCP   68m	# preview
+
+Print the active service and check the hash selector
+	terminal --> k get svc rollout-bluegreen-active -n blue-green -o yaml
+
+We have section selectors
+-------------------------------------------------
+...
+  selector:
+    app: blue-green-deployment					# common selector
+    rollouts-pod-template-hash: 6ff95b6564			# this is the hash selector - replicaset hash
+...
+-------------------------------------------------
+
+The selector rollouts-pod-template-hash: 6ff95b6564 is added by Argo rollouts. This hash is the same as the hash of the replicaset.
+The selector app: blue-green-deployment is added by us in the rollout template section.
+
+
+
+Print the preview service and check the hash selector
+	terminal --> k get svc rollout-bluegreen-preview -n blue-green -o yaml
+
+We have section selectors
+-------------------------------------------------
+...
+  selector:
+    app: blue-green-deployment					# common selector
+    rollouts-pod-template-hash: 6ff95b6564			# same hash selector as active service - same replicaset hash
+...
+-------------------------------------------------
+
+We can see that the hash selector is the same as in the active service and its pointing at the same replicaset.
+
+
+
+CREATE NEW APPLICATION VERSION
+------------------------------
+
+Modify one item under template spec in the rollout.yaml file to trigger argo rollout to create new replicaset. For this purpose we will change environment variable 'html_name' to 'app-v2.html'. This will trigger the usage of the second application and creation of new replicaset by argo rollouts.
+
+
+rollout.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout                                      
+metadata:
+  name: blue-green-deployment                       
+spec:
+  replicas: 4                                       
+  selector:
+    matchLabels:
+      app: blue-green-deployment                    
+  template:                                         # pod template
+    metadata:
+      labels:
+        app: blue-green-deployment                  
+    spec:
+      containers:
+      - name: blue-green                            # application name
+        image: blue-green                           # image name
+        imagePullPolicy: Never                      
+        env:
+        - name: html_name                           # name of environment variable
+          value: "app-v2.html"                      # set this value from "app-v1.html" to "app-v2.html"
+        ports:
+        - containerPort: 5000                       
+  strategy:
+    blueGreen:                                                
+      activeService: rollout-bluegreen-active                 
+      previewService: rollout-bluegreen-preview               
+      autoPromotionEnabled: false
+      # abortScaleDownDelaySeconds: 10
+      # autoPromotionEnabled: false
+      # scaleDownDelaySeconds: 60
+      # previewReplicaCount: 2
+      # autoPromotionSeconds: 20
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-active                              # name of the active service
+spec:
+  selector:
+    app: blue-green-deployment                                # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-preview                            # name of the preview service
+spec:
+  selector:
+    app: blue-green-deployment                               # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+-----------------------------------------------
+save changes
+
+
+Apply the changes on the cluster
+	terminal --> k apply -f rollout.yaml -n blue-green
+
+	# result:
+	rollout.argoproj.io/blue-green-deployment configured		# configured !!!
+	service/rollout-bluegreen-active unchanged
+	service/rollout-bluegreen-preview unchanged
+
+We can see that only the deployment is changed.
+
+
+In Kargo Dashboard we can see that new replicaset (revision 2) is created - http://rollouts.localhost:32073/rollouts/
+We can see that only preview service is pointing at the new (version 2) replicaset.
+
+List replicasets in blue-green namespace
+	terminal --> k get rs -n blue-green
+
+	# result:
+	NAME                               DESIRED   CURRENT   READY   AGE
+	blue-green-deployment-6cf668b447   4         4         4       6m16s		# version 2 replicaset
+	blue-green-deployment-6ff95b6564   4         4         4       97m		# version 1 replicaset
+
+
+Print the active service and check the hash selector
+	terminal --> k get svc rollout-bluegreen-active -n blue-green -o yaml
+
+We have section selectors
+-------------------------------------------------
+...
+  selector:
+    app: blue-green-deployment					# common selector
+    rollouts-pod-template-hash: 6ff95b6564			# not changed hash selector - version 1 replicaset hash
+...
+-------------------------------------------------
+
+rollouts-pod-template-hash hash is still pointing at the version replicaset.
+
+
+Print the preview service and check the hash selector
+	terminal --> k get svc rollout-bluegreen-preview -n blue-green -o yaml
+
+We have section selectors
+-------------------------------------------------
+...
+  selector:
+    app: blue-green-deployment					# common selector
+    rollouts-pod-template-hash: 6cf668b447			# changed hash - new replicaset (version 2) hash
+...
+-------------------------------------------------
+
+Argo rollouts controller is responsible for modify the hash slector of the preview service to point at the new (version 2) replicaset.
+
+
+
+PROMOTE THE NEW APPLICATION VERSION
+-----------------------------------
+
+Since autopromoting is diabled we need to promote the new application version manually.
+
+The active service is still pointing at the version 1 of the application - http://blue-green.demo:32073/
+
+
+Promotet the version 2 rollout with CLI
+	terminal --> k argo rollouts promote blue-green-deployment -n blue-green
+	or 
+	termimnal --> kargo promote blue-green-deployment -n blue-green
+
+	# result: rollout 'blue-green-deployment' promoted
+
+In Kargo Dashboard we can see that the active service is pointing at the revision 2 - http://rollouts.localhost:32073/rollouts/
+Revision 1 (old revision) is terminated. This means that both services (active and preview) are pointing at revision 2.
+
+List replicasets in blue-green namespace
+	terminal --> k get rs -n blue-green
+
+	# result:
+	NAME                               DESIRED   CURRENT   READY   AGE
+	blue-green-deployment-6cf668b447   4         4         4       17m		# revision 2 replicaset
+	blue-green-deployment-6ff95b6564   0         0         0       108m		# revision 1 replicaset
+
+We can check hash selectors in the services and they are both pointing at the revision 2 replicaset hash
+	terminal --> k get svc rollout-bluegreen-active -n blue-green -o yaml
+	terminal --> k get svc rollout-bluegreen-preview -n blue-green -o yaml
+
+Now version 2 of the application is served - http://blue-green.demo:32073/
+
+
+
+AUTOMATED PROMOTIONS
+--------------------
+
+Delete the active rollout to prepare the example
+	terminal --> k delete -f rollout.yaml -n blue-green
+
+	# result:
+	rollout.argoproj.io "blue-green-deployment" deleted from blue-green namespace
+	service "rollout-bluegreen-active" deleted from blue-green namespace
+	service "rollout-bluegreen-preview" deleted from blue-green namespace
+
+
+In rollout.yaml file we comment the flag for 'autoPromotionEnabled: false' to activate automatic promotion and set the environment variable 'html_name' to 'app-v1.html'.
+
+
+rollout.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout                                      
+metadata:
+  name: blue-green-deployment                       
+spec:
+  replicas: 4                                       
+  selector:
+    matchLabels:
+      app: blue-green-deployment                    
+  template:                                         
+    metadata:
+      labels:
+        app: blue-green-deployment                  
+    spec:
+      containers:
+      - name: blue-green                            
+        image: blue-green                           
+        imagePullPolicy: Never                      
+        env:
+        - name: html_name                           # name of environment variable
+          value: "app-v2.html"                      # set to "app-v1.html"
+        ports:
+        - containerPort: 5000                       
+  strategy:
+    blueGreen:                                                
+      activeService: rollout-bluegreen-active                 
+      previewService: rollout-bluegreen-preview               
+      # autoPromotionEnabled: false                 # enable automatic promotions 
+      # abortScaleDownDelaySeconds: 10
+      # autoPromotionEnabled: false
+      # scaleDownDelaySeconds: 60
+      # previewReplicaCount: 2
+      # autoPromotionSeconds: 20
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-active                              # name of the active service
+spec:
+  selector:
+    app: blue-green-deployment                                # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-preview                            # name of the preview service
+spec:
+  selector:
+    app: blue-green-deployment                               # label selector
+  ports:
+  - protocol: TCP
+    port: 5000
+    targetPort: 5000
+-----------------------------------------------
+save changes
+
+Apply the rollout file
+	terminal --> k apply -f rollout.yaml -n blue-green
+
+	# result:
+	rollout.argoproj.io/blue-green-deployment created
+	service/rollout-bluegreen-active created
+	service/rollout-bluegreen-preview created
+
+
+Now version 1 of the application is served - http://blue-green.demo:32073/
+
+
+Modify rollout.yaml file and set the environment variable to "app-v2.html". This will change the version.
+
+rollout.yaml
+-----------------------------------------------
+...
+    spec:
+      containers:
+      - name: blue-green                            
+        image: blue-green                           
+        imagePullPolicy: Never                      
+        env:
+        - name: html_name                           # name of environment variable
+          value: "app-v2.html"                      # set to "app-v2.html"
+...
+-----------------------------------------------
+save changes
+
+Apply the rollout
+	terminal --> k apply -f rollout.yaml -n blue-green
+
+	# result:
+	rollout.argoproj.io/blue-green-deployment configured	# changed deployment
+	service/rollout-bluegreen-active unchanged
+	service/rollout-bluegreen-preview unchanged
+
+In argo dashboard we can see that the new version 2 is automatically promoted and version 1 is scaled down after 30 seconds.
+
+Flag: autoPromotionSeconds: 20
+------------------------------
+The flag 'autoPromotionSeconds: 20' make the rollout automatically prmote the new replicaset to active service after 20 seconds if the app version is deployed successfully and the old revision is scaled down after 30 seconds (default). If flag 'autoPromotionEnabled: false' is active, 'autoPromotionSeconds: 20' is ignored. 
+
+
+
+ROLLOUT FEATURES EXPLOANATION
+-----------------------------
+
+Flag: 'previewReplicaCount: 2'
+	- will indicate the number of replicas the new version of the application should run. After the promotion the replica count will be increased to 4 as configured in the rollout template section. This flag is used as resource restriction to the testing phase.
+
+Flag: 'scaleDownDelaySeconds: 60'
+	- Used to delay scaling down the old version replicaset after the active service is switched to the new version replicaset. By default is 30 seconds.
+
+Flag: 'abortScaleDownDelaySeconds: 10'
+	- If we apply new version rollout
+		terminal --> k apply -f rollout.yaml -n blue-green 
+	- Then we decide to abort the rollout
+		terminal --> kargo abort blue-green-deployment -n blue-green
+
+The rollout controller will terminate the new version after 10 seconds.
+	
+
+Delete the rollout nad 'blue-green' to keep the clusters fresh and clean
+	terminal --> k delete -f rollout.yaml -n blue-green
+	terminal --> k delete ns blue-green
+
+
+
+
+
