@@ -100,20 +100,8 @@ HELM:
 Deploy Aego Workflows Helm Chart
 	terminal --> helm install my-workflow argo/argo-workflows -n argo -f argo-workflows-values.yaml
 
-Create rolebinding for cluster admin role in 'argo' namespace
-	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo:default -n argo
-
-Deploy the argo-workflows-ingress.yaml controller
-	terminal --> k apply -f argo-workflows-ingress.yaml
-
 Create rolebinding for admin role in 'argo' namespace so we can execute actions with Argo Workflows UI
 	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo:default -n argo
-
-
-Deafult service account permissions
------------------------------------
-Create rolebinding for admin service account in working 'argo-events' namespace
-	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
 
 
 Manual:
@@ -121,7 +109,10 @@ Manual:
 Deploy Argo Workflows manifests
 	terminal --> kubectl apply -n argo -f https://github.com/argoproj/argo-workflows/releases/latest/download/install.yaml
 
-Deploy the argo-workflows-ingress.yaml controller
+Create rolebinding for admin role in 'argo' namespace so we can execute actions with Argo Workflows UI
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo:default -n argo
+
+Deploy the argo-workflows-ingress.yaml resource
 	terminal --> k apply -f argo-workflows-ingress.yaml
 
 Patch the argo workflow server to avoid authentication (NOT FOR PRODUCTION !)
@@ -131,16 +122,47 @@ Wait a minute and access our Argo Worflows UI on https://argo-workflows.localhos
 
 
 
+ARGO EVENTS
+-----------
+
+WE NEED TO HAVE INSTALLED ARGO WORKFLOWS TO INSTALL ARGO EVENTS - https://argoproj.github.io/argo-events/quick_start/
+
+Official Installation instructions - https://argoproj.github.io/argo-events/installation/
+
+1. Create argo events namespace
+	terminal --> kubectl create namespace argo-events
+
+
+2. Deploy Argo Events SA, ClusterRoles, and Controller for Sensor, EventBus, and EventSource
+	terminal --> kubectl apply -f https://raw.githubusercontent.com/argoproj/argo-events/stable/manifests/install.yaml
+	terminal -> kubectl apply -f https://raw.githubusercontent.com/argoproj/argo-events/stable/manifests/install-validating-webhook.yaml
+
+
+3. Deploy the eventbus
+	terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/stable/examples/eventbus/native.yaml
+
+
+4. Create a service account with RBAC settings to allow the sensor to trigger workflows, and allow workflows to function
+	Sensor RBAC - allows sensor to trigger workflows
+		terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/sensor-rbac.yaml
+
+	Workflow RBAC - allows workflows to function properly
+		terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/workflow-rbac.yaml
 
 
 
-13. Create and configure working namespace
-==========================================
 
-Create working namespace 'argo-events'
-	terminal --> kubectl create ns argo-events
 
-	# result: argo-events/workflows created
+CONFIGURE ARGO WORKFLOWS PERMISSIONS IN ARGO-EVENTS NAMESPACE 
+=============================================================
+
+We have 4 cases
+	- case 1 - if Argo Workflows is installed with HELM and we use default namespace service account
+	- case 2 - if Argo Workflows is installed with HELM and we use dedicated namespace service account
+	- case 3 - if Argo Workflows is installed manually and we use default namespace service account
+	- case 4 - if Argo Workflows is installed manually and we use dedicated namespace service account
+
+There is some differences that matters in audit point of view but all cases work. 
 
 
 IF ARGO WORKFLOWS IN INSTALLED WITH HELM
@@ -195,9 +217,13 @@ Give it permissions
 	terminal --> kubectl create rolebinding argo-workflows-admin --clusterrole=admin --serviceaccount=argo-events:argo-workflows -n argo-events
 
 
-
-
-
+NOTES:
+------
+- The key difference between HELM and Manual is the service account name in 'argo' namespace
+  * HELM: argo:my-workflow-argo-workflows-workflow-controller
+  * Manual: argo:argo
+- Using a dedicated service account (Scenarios 2 & 4) is more secure for production
+- For development/testing, default service account (Scenarios 1 & 3) is simpler
 
 
 
@@ -525,6 +551,16 @@ From the folder location create Docker secret
 	terminal --> kubectl create secret generic docker-config-secret --from-file=config.json=./docker-config.json -n argo-events
 
 	# result: secret/docker-config-secret created
+
+
+
+
+
+
+
+
+
+
 
 
 
