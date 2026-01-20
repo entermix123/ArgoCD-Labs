@@ -1,0 +1,857 @@
+Install and configure ArgoCD in few methods.
+
+1st method - useing cubectl, applying ArgoCD manifest
+2nd methid - using Helm
+3th method - using nginx ingress controller
+
+We will use resources on https://killercoda.com/. Login with GitHub and go to the site we will go true the cases: https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+CREATE INFRASTRUCTURE ENVIRONMENT
+=================================
+
+We need up and running Kubernetes cluster. We can set up Kubernetes cluster with several ways. 
+
+We can Install ArgoCD in 2 different modes:
+	1. Non-HA mode - we will have only one replica for each component of ArgoCD in our Kubernetes cluster.
+	2. HA mode - we will have multiple replicas of each components of ArgoCD in the cluster
+	# It is recommended to set a HA (high availability) mode for production environments. For testing purposes we will use not HA mode
+
+
+There few methods to setup ArgoCD
+	1. Use kubectl and apply ArgoCD manifest file
+	2. Use Helm Chart and overwriting argocd server-service to NodePort
+	3. Use Helm Chart and Nginx ingress-controller and overwriting ingress controller values
+
+
+We will start with the labs on https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+1. INSTALL ARGOCD USING KUBECTL
+===============================
+
+01. Setting-Up Argo CD
+----------------------
+
+Practice Setting-up Argo CD and Access UI, in this practice we will cover:
+
+    1. Installing Argo CD using Yaml manifests.
+    2. Verify pods are running and ready.
+    3. Getting initial admin password and access Web UI.
+
+Press Start Button
+
+Tasks description
+	- Install Argo CD using Non-HA manifests in argocd namespace.
+	- Use these manifests: /tmp/install.yaml
+	- After installing Argo CD, make sure that pods are running and ready.
+
+
+Solution
+	1. Create a namespace
+		terminal --> kubectl create namespace argocd
+	2. Install ArgoD with the install.yaml manifest file
+		terminal --> kubectl apply -n argocd -f /tmp/install.yaml
+	3. Wait 2-3 minutes and list pods in the argocd namespace
+		terminal --> kubectl get pods -n argocd
+
+# result:
+NAME                                                READY   STATUS    RESTARTS   AGE
+argocd-application-controller-0                     1/1     Running   0          99s
+argocd-applicationset-controller-69d55448f5-qtv5p   1/1     Running   0          101s
+argocd-dex-server-6f4698f744-hmbzs                  1/1     Running   0          101s
+argocd-notifications-controller-6f467c5c8d-tjzz4    1/1     Running   0          100s
+argocd-redis-586866bd59-2jhsc                       1/1     Running   0          100s
+argocd-repo-server-bbb5dbcc8-qbrml                  1/1     Running   0          100s
+argocd-server-78c4dfd6f6-px8pc                      1/1     Running   0          100s
+
+argocd-dex-server - Using this component for authentication purposes. Integration with external authentication systems like ldap
+
+argocd-redis - Caching purposes
+
+argocd-repo-server - Used for Caching repositories
+
+argocd-server - we can commmunicate with argocd by authenticate to this component. This component is TLS enabled by default.
+
+
+Click NEXT Button
+
+
+
+You need admin password in order to login to Argo CD web ui. 
+
+We can list all secrets in the argocd namespace
+	terminal --> kubectl get secrets -n argocd
+
+	# result:
+	NAME                          TYPE     DATA   AGE
+	argocd-initial-admin-secret   Opaque   1      12m
+	argocd-notifications-secret   Opaque   0      13m
+	argocd-redis                  Opaque   1      12m
+	argocd-secret                 Opaque   3      13m
+
+We can print 'argocd-initial-admin-secret' to see the secret
+	terminal --> kubectl get secret argocd-initial-admin-secret -n argocd -o yaml
+
+# result:
+------------------------------------------------------
+apiVersion: v1
+data:
+  password: YWc1SWlHaUlXUkRRZ0FnZg==			# this is the secret
+kind: Secret
+metadata:
+  creationTimestamp: "2025-12-08T11:45:54Z"
+  name: argocd-initial-admin-secret
+  namespace: argocd
+  resourceVersion: "3853"
+  uid: d34ba9d5-ed78-42ea-a7f2-a7ad842147b9
+type: Opaque
+------------------------------------------------------
+
+We need to decode the secret
+	terminal --> echo YWc1SWlHaUlXUkRRZ0FnZg== | base64 --decode
+
+	# result: ag5IiGiIWRDQgAgf
+
+Get the initial admin password is stored as a secret in argocd namespace with one command:
+	terminal --> 
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+
+	# result: ag5IiGiIWRDQgAgf
+
+We can access ArgoCD UI in the link of the task page
+
+Username: admin
+Password: ag5IiGiIWRDQgAgf
+
+
+ArgoCD is TLS enabled by default. TLS (Transport Layer Security) is a cryptographic protocol that secures data transmission between clients (e.g., your browser or kubectl) and servers (like the ArgoCD server or K8s API server) over insecure networks. It's the "S" in HTTPS and prevents eavesdropping, tampering, or impersonation.
+
+
+
+There 2 changes in the ArgoCD manifest file /tmp/install.yaml for testing purposes.
+
+1. Check TLS communication in this ArgoCD installation.
+-------------------------------------------------------
+List configmaps for ArgoCD
+	terminal --> k get cm -n argocd
+
+# result:
+NAME                        DATA   AGE
+argocd-cm                   0      26m
+argocd-cmd-params-cm        1      26m		# this is the target configmap
+argocd-gpg-keys-cm          0      26m
+argocd-notifications-cm     0      26m
+argocd-rbac-cm              0      26m
+argocd-ssh-known-hosts-cm   1      26m
+argocd-tls-certs-cm         0      26m
+kube-root-ca.crt            1      26m
+
+Print the configmap
+	terminal --> k get cm argocd-cmd-params-cm -n argocd -o yaml
+
+# result:
+------------------------------------------------------
+apiVersion: v1
+data:
+  server.insecure: "true"				# this means that TLS is disabled
+kind: ConfigMap
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"v1","data":{"server.insecure":"true"},"kind":"ConfigMap","metadata":{"annotations":{},"labels":{"app.kubernetes.io/name":"argocd-cmd-params-cm","app.kubernetes.io/part-of":"argocd"},"name":"argocd-cmd-params-cm","namespace":"argocd"}}
+  creationTimestamp: "2025-12-08T11:45:14Z"
+  labels:
+    app.kubernetes.io/name: argocd-cmd-params-cm
+    app.kubernetes.io/part-of: argocd
+  name: argocd-cmd-params-cm
+  namespace: argocd
+  resourceVersion: "3579"
+  uid: e953a916-86ea-4c81-8da0-defea4873296
+------------------------------------------------------
+
+
+2. Check ArgoCD server service
+------------------------------
+List services
+	terminal --> k get svc -n argocd 
+
+# result:
+NAME                                      TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)                      AGE
+argocd-applicationset-controller          ClusterIP   10.109.82.126    <none>        7000/TCP,8080/TCP            30m
+argocd-dex-server                         ClusterIP   10.102.195.49    <none>        5556/TCP,5557/TCP,5558/TCP   30m
+argocd-metrics                            ClusterIP   10.111.8.93      <none>        8082/TCP                     30m
+argocd-notifications-controller-metrics   ClusterIP   10.110.89.246    <none>        9001/TCP                     30m
+argocd-redis                              ClusterIP   10.105.128.254   <none>        6379/TCP                     30m
+argocd-repo-server                        ClusterIP   10.98.223.244    <none>        8081/TCP,8084/TCP            30m
+argocd-server                             NodePort    10.103.143.206   <none>        80:32073/TCP,443:30164/TCP   30m	# target
+argocd-server-metrics                     ClusterIP   10.102.200.156   <none>        8083/TCP                     30m
+
+
+The default settings of the target service type is ClusterIP, but here is changed to NodePort so we can access ArgoCD UI.
+
+Print the service
+	teminal --> k describe svc argocd-server -n argocd
+
+argocd-server
+------------------------------------------------------
+Name:                     argocd-server
+Namespace:                argocd
+Labels:                   app.kubernetes.io/component=server
+                          app.kubernetes.io/name=argocd-server
+                          app.kubernetes.io/part-of=argocd
+Annotations:              <none>
+Selector:                 app.kubernetes.io/name=argocd-server
+Type:                     NodePort
+IP Family Policy:         SingleStack
+IP Families:              IPv4
+IP:                       10.103.143.206
+IPs:                      10.103.143.206
+Port:                     http  80/TCP
+TargetPort:               8080/TCP
+NodePort:                 http  32073/TCP
+Endpoints:                192.168.1.8:8080
+Port:                     https  443/TCP
+TargetPort:               8080/TCP
+NodePort:                 https  30164/TCP
+Endpoints:                192.168.1.8:8080
+Session Affinity:         None
+External Traffic Policy:  Cluster
+Internal Traffic Policy:  Cluster
+Events:                   <none>
+------------------------------------------------------
+
+
+
+If we want to install ArgoCD aoutside KillerCoda we need to eidt these 2 objects
+	- argocd-server				# set appropriate port
+	- argocd-cmd-params-cm			# set appropriate data block - secret
+
+
+We can find the original installation instruction on https://argo-cd.readthedocs.io/en/stable/getting_started/#1-install-argo-cd
+
+We can check the original ArgoCD manifest file - https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+
+Find the default configmap in the argocd manifest file:
+-------------------------------------------------------
+Search for 'argocd-cmd-params-cm' in the install.yaml file and 1 of 171 results is the configmap
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/name: argocd-cmd-params-cm
+    app.kubernetes.io/part-of: argocd
+  name: argocd-cmd-params-cm
+
+
+Find the default service in the argocd manifest file:
+-----------------------------------------------------
+Search for 'kind: service' in the install.yaml file and 23 of 24 results is the configmap
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: server
+    app.kubernetes.io/name: argocd-server
+    app.kubernetes.io/part-of: argocd
+  name: argocd-server
+spec:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 8080
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app.kubernetes.io/name: argocd-server
+
+
+
+Change the configuration what we can use:
+-----------------------------------------
+
+
+Set the service to NodePort:
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: server
+    app.kubernetes.io/name: argocd-server
+    app.kubernetes.io/part-of: argocd
+  name: argocd-server
+spec:
+  ports:
+  - name: http
+    port: 80
+    nodePort: 32073		# added
+    protocol: TCP
+    targetPort: 8080
+  - name: https
+    port: 443
+    nodePort: 32074		# added
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app.kubernetes.io/name: argocd-server
+  typr: NodePort
+
+
+
+Disable TLS in the configmap
+
+---
+apiVersion: v1
+kind: ConfigMap
+data:					# added 
+  server.insecure: "true"		# added
+metadata:
+  labels:
+    app.kubernetes.io/name: argocd-cmd-params-cm
+    app.kubernetes.io/part-of: argocd
+  name: argocd-cmd-params-cm
+
+
+
+
+
+
+
+2. INSTALL ARGOCD USING HELM CHARTS
+===================================
+
+We need to install evironment tools depending on what kind of setup we will use for managing Kubernetes clusters.
+
+We will go true installing lightweight setup on windows 11 with:
+	1. Docker - container management application
+	2. Kind - application that uses Docker to manage Kubernetes clusters with containers
+	3. Kubectl - Kubernetes CLI 
+	4. Helm - Kubernetes extension that help managing manifest files in Kuberentes clusters
+
+
+
+INSTALL PREREQUISITES
+---------------------------------------------------------------------------
+
+1. Istall Docker on Windows
+---------------------------
+Register, download and install Docker - https://www.docker.com/products/docker-desktop/
+
+
+2. Install Kind on Windows
+--------------------------
+
+Kind install documentation - https://kind.sigs.k8s.io/docs/user/quick-start/#installing-from-release-binaries
+
+Install Kind with Shell
+	terminal --> curl.exe -Lo kind-windows-amd64.exe https://kind.sigs.k8s.io/dl/v0.30.0/kind-windows-amd64
+Move-Item .\kind-windows-amd64.exe c:\Users\your_user\kind.exe
+
+Verify Kind installation
+	terminal --> kind version
+
+
+3. Install kubectl on windows
+-----------------------------
+Kubernetes documentation for installing kubectl
+	- https://kubernetes.io/docs/tasks/tools/
+
+Install kubectl on Windows
+	- https://kubernetes.io/docs/tasks/tools/install-kubectl-windows/
+
+Install kubectl using curl
+	terminal --> curl.exe -LO "https://dl.k8s.io/release/v1.34.0/bin/windows/amd64/kubectl.exe"
+
+Verify installation using power shell
+	power shell --> $(Get-FileHash -Algorithm SHA256 .\kubectl.exe).Hash -eq $(Get-Content .\kubectl.exe.sha256)
+	# result: true
+
+Find the location of the kubectl.exe file - usually in C:/Users/your_user and copy the path from the windows explorer navigation bar.
+
+Append or prepend the kubectl binary folder to your PATH environment variable.
+	- WinKey, type 'environment' and click on 'Edit the system variables', click 'Environment Variables' button at the bottom
+	- In the System variables list, find 'Path', mark it and click 'Edit...' button. Click 'New' and paste the path to the kubectl.exe file in the field. Click 'Ok' button. 
+	# If we have more than one kubectl installed we need to 'move up' the path of the specific installation so Windows will use the first found installation as default.
+	- Restart the PC
+
+Open CMD and check if the kubectl location and installation are successful
+	terminal --> where kubectl		# this should list all kubectl installations and their locations
+	terminal --> kubectl version --client	# this should list all client and their versions (kubectl, kustomize etc.)
+
+	# example result:
+	Client Version: v1.34.0
+	Kustomize Version: v5.7.1
+
+
+4. Install Helm on Windows
+--------------------------
+
+Helm install documentation - https://helm.sh/docs/intro/install
+
+Download Helm - https://get.helm.sh/helm-v4.0.1-windows-amd64.zip
+
+Extract helm.exe in c:\Users\your_user\		# same as Kind
+
+Verify Helm installation
+	terminal --> helm version
+
+---------------------------------------------------------------------------
+
+
+
+CREATE KUBERNETES CLUSTER WITH KIND
+-----------------------------------
+
+In case we want cluster with more than one node:
+
+1. Create kind-config.yaml file on you system. Example - C:\Users\your_user\Kubernetes_Kind_Projects\kind-config.yaml
+
+
+Option 1 - using helm official chart for ArgoCD
+
+kind-config.yaml
+-------------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  extraPortMappings:
+  - containerPort: 32073
+    hostPort: 32073
+    protocol: TCP
+  - containerPort: 32074
+    hostPort: 32074
+    protocol: TCP
+- role: worker
+- role: worker
+-------------------------------------------------
+
+
+
+Option 2 - Use Nginx ingress controller
+
+kind-config.yaml
+-------------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 32073
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 32074
+    protocol: TCP
+- role: worker
+- role: worker
+-------------------------------------------------
+
+
+We will use nginx ingresscontroller - option 2
+
+2. Create cluster 
+	terminal --> kind create cluster --config C:\path\to\file\kind-config-nginx.yaml --image kindest/node:v1.34.0
+
+In case we want simple one node cluster we start it with:
+	terminal --> kind create cluster --name my-argocd-cluster --image kindest/node:v1.34.0
+
+3. Confirm cluster creation
+	terminal --> kubectl cluster-info 
+	terminal --> kubectl get nodes
+
+4. Set roles for worker nodes
+	terminal --> kubectl label nodes kind-worker kind-worker2 node-role.kubernetes.io/worker= --overwrite
+
+	# result:
+	node/kind-worker labeled
+	node/kind-worker2 labeled
+
+
+
+
+SET ALIAS FOR KUBECTL (Shell and CMD)
+-------------------------------------
+
+
+for SHELL:
+
+We use command 'k' instead of 'kubectl' to save time and prevent mistyping.
+
+Edit Shell Profile configs
+	terminal --> if (!(Test-Path -Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force }
+notepad $PROFILE
+
+Microsoft.PowerShell_profile.ps1
+---------------------------------
+# Alias for kubectl
+Set-Alias -Name k -Value kubectl
+---------------------------------
+Save changes and restart PowerShell
+
+
+For CMD:
+Set alias for kubectl
+	etrminal --> doskey k=kubectl $*
+
+
+
+PREVENT SCHEDULING PODS ON CONTROLPLANE
+---------------------------------------
+
+Prevent scheduling deployments on the controlplane
+	terminal --> kubectl taint nodes kind-control-plane node-role.kubernetes.io/control-plane:NoSchedule --overwrite
+
+Check existing taints
+	shell terminal --> kubectl describe node kind-control-plane | Select-String -Pattern "Taint"
+
+	# result: Taints:             node-role.kubernetes.io/control-plane:NoSchedule
+
+
+
+INSTALL ARGOCD WITH HELM
+------------------------
+
+We will go over 2 types of Helm ArgoCD installations
+	I. 	Modifying Helm Chart and overwriting argocd server-service to NodePort - values.yaml
+	II. 	Modifying Helm Chart and Nginx ingress-controller and overwriting ingress controller - values-nginx.yaml
+
+
+I. Modifying Helm Chart and overwriting argocd server-service to NodePort - values.yaml:
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+1. Add ArgoCD repository in Helm registry
+	terminal --> helm repo add argo https://argoproj.github.io/argo-helm 
+
+	# result: "argo" has been added to your repositories
+
+	1.1. Confirm repo is added
+		terminal --> helm repo list
+
+		# result:
+		NAME    URL
+		argo    https://argoproj.github.io/argo-helm
+
+2. Update Helm repositories
+	terminal --> helm repo update
+	
+	# result: 
+	Hang tight while we grab the latest from your chart repositories...
+	...Successfully got an update from the "argo" chart repository
+	Update Complete. ⎈Happy Helming!⎈
+
+
+3. Create argocd namespace
+	terminal --> kubectl create ns argocd
+
+	# result: namespace/argocd created
+
+We need to configure NodePort service for ArgoCD UI to be accessable:
+4. Create values.yaml for ArgoCD installation
+	terminal --> notepad values.yaml
+
+values.yaml
+---------------------------------
+server:
+  service:
+    type: NodePort
+    nodePortHttp: 32073
+    nodePortHttps: 32074
+---------------------------------
+
+
+4. Install ArgoCD on the cluster
+	terminal --> helm install argocd argo/argo-cd -f .\values.yaml -n argocd --create-namespace
+
+	# helm install					- use helm application to install
+	# argocd 	 				- name of the helm deployment
+	# argo/argo-cd					- helm chart
+	# -f .\values.yaml				- use file values.yaml in the current dir
+	# -n argocd --create-namespace			- selected namespace or create it
+
+
+5. List service in argocd namespace and check the type of the server service
+	terminal --> k get svc -n argocd
+
+	# result:
+NAME                               TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                      AGE
+argocd-applicationset-controller   ClusterIP   10.96.186.86    <none>        7000/TCP                     93s
+argocd-dex-server                  ClusterIP   10.96.69.196    <none>        5556/TCP,5557/TCP            93s
+argocd-redis                       ClusterIP   10.96.155.85    <none>        6379/TCP                     93s
+argocd-repo-server                 ClusterIP   10.96.236.248   <none>        8081/TCP                     93s
+argocd-server                      NodePort    10.96.187.167   <none>        80:32073/TCP,443:32074/TCP   93s	# NodePort
+
+
+
+
+
+II. Modifying Helm Chart and Nginx ingress-controller and overwriting ingress controller - values-nginx.yaml
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+
+Create configuration file from the original Helm Argocd chart
+	terminal --> helm show values argo/argo-cd > values-nginx.yaml
+
+Open the file and search for 'ingress'. On line 2390 we can find the ingress fields. 
+
+Modify ingress configurations as official documentation - https://argo-cd.readthedocs.io/en/latest/operator-manual/ingress/#kubernetesingress-nginx
+
+Option 1 - https://argo-cd.readthedocs.io/en/latest/operator-manual/ingress/#option-1-ssl-passthrough
+
+We clear the file and set final configuration as follow:
+
+values-nginx.yaml
+--------------------------------------------------------------------
+server:
+    # Argo CD server ingress configuration
+    ingress:
+        # -- Enable an ingress resource for the Argo CD server
+        enabled: true
+        annotations:
+            nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+
+        # -- Defines which ingress controller will implement the resource
+        ingressClassName: nginx
+
+        # -- Argo CD server hostname
+        # @default -- `""` (defaults to global.domain)
+        hostname: "localhost"
+
+        # -- The path to Argo CD server
+        path: /
+
+        # -- Ingress path type. One of `Exact`, `Prefix` or `ImplementationSpecific`
+        pathType: Prefix
+
+        # -- Enable TLS configuration for the hostname defined at `server.ingress.hostname`
+        ## TLS certificate will be retrieved from a TLS secret `argocd-server-tls`
+        ## You can create this secret via `certificate` or `certificateSecret` option
+        tls: true
+--------------------------------------------------------------------
+# save as UTF-8 format
+
+
+If we install with this method we need to uninstall the installed version first
+
+Uninstall existing ArgoCD 
+	terminal --> helm uninstall argocd -n argocd
+	
+	# result:
+	These resources were kept due to the resource policy:
+	[CustomResourceDefinition] applications.argoproj.io
+	[CustomResourceDefinition] applicationsets.argoproj.io
+	[CustomResourceDefinition] appprojects.argoproj.io
+	release "argocd" uninstalled
+
+
+Before installing ArgoCD with nginx ingress controller we need to install nginx deployment
+	terminal --> kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.0/deploy/static/provider/kind/deploy.yaml
+
+	Confirm that Nginx deployment is running
+		terminal --> k get pods -n ingress-nginx
+
+		# result:
+		NAME                                        READY   STATUS      RESTARTS   AGE
+		ingress-nginx-admission-create-2clvc        0/1     Completed   0          49s
+		ingress-nginx-admission-patch-xwb6r         0/1     Completed   0          49s
+		ingress-nginx-controller-569c5c4774-ftqzm   1/1     Running     0          49s		# running
+
+		terminal --> k get deployment -n ingress-nginx
+
+		# result:
+		NAME                       READY   UP-TO-DATE   AVAILABLE   AGE
+		ingress-nginx-controller   1/1     1            1           55s
+		
+
+	Edit the deployment and add '--enable-ssl-passthrough' flag in specs
+		terminal --> k edit deployment ingress-nginx-controller -n ingress-nginx
+
+------------------------------------------------------------
+...
+    spec:
+      containers:
+      - args:
+        - /nginx-ingress-controller
+        - --election-id=ingress-nginx-leader
+        - --controller-class=k8s.io/ingress-nginx
+        - --ingress-class=nginx
+        - --configmap=$(POD_NAMESPACE)/ingress-nginx-controller
+        - --validating-webhook=:8443
+        - --validating-webhook-certificate=/usr/local/certificates/cert
+        - --validating-webhook-key=/usr/local/certificates/key
+        - --watch-ingress-without-class=true
+        - --enable-metrics=false
+        - --publish-status-address=localhost
+        - --enable-ssl-passthrough						# added
+...
+------------------------------------------------------------
+
+
+Install ArgoCD with nginx ingress controller
+	terminal --> helm install argocd argo/argo-cd -f C:\Users\your_user\Kubernetes_Kind_Projects\values-nginx.yaml -n argocd --create-namespace
+
+
+Confirm ArgoCD deployment
+	terminal --> k get ingress -n argocd
+
+	# result:
+	NAME            CLASS   HOSTS       ADDRESS     PORTS     AGE
+	argocd-server   nginx   localhost   localhost   80, 443   2m8s		# Wait ADDRESS to appear
+
+
+
+
+ACCESS ARGOCD UI
+----------------
+
+Find initial password for ArgoCD:
+	shell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+	# result: password we will use to access the ArgoCD UI
+
+Open ArgoCD UI:
+
+In case we are using official Helm chart:
+- Open braowser and go to localhost:32074
+- Press Advanced and accept the risk and continue
+
+In case we are using nginx ingress controller
+- Open braowser and go to localhost			# the hostname we set up in the values-nginx.yaml file
+- Press Advanced and accept the risk and continue
+
+Login to ArgoCD
+	Username: admin
+	Password: use the password
+
+
+
+
+INSTALL ARGOCD CLI
+------------------
+
+Go to killercoda.com - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+Open the "02. Instaling Argo CD CLI" exercise - third one
+
+
+Requirements
+------------
+Practice installing Argo CD CLI, in this practice we will cover:
+
+    Installing Argo CD CLI.
+    Login to Argo CD using CLI.
+    Verify by getting some data using CLI.
+
+START
+
+
+Install ArgoCD CLI
+	terminal --> curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/download/v2.4.8/argocd-linux-amd64
+
+Give executable file rights
+	terminal --> chmod +x /usr/local/bin/argocd
+
+
+Check if ArgoCD CLI is installed
+	terminal --> argocd
+
+CHECK
+
+
+- Login to Argo CD using CLI, use argocd login command.
+
+example: argocd login argocdHost --grpc-web .
+
+Where argocdHost is a hostname or IP that can be used to reach Argo CD server, We have two options in this environment:
+
+    Use external host name: get the external host name only without the scheme or paths (https) ACCESS ARGO CD, host name example: 9c9....-32073.spch.r.killercode.com
+
+    Since Argo CD server service is exposed using node port 32073, you can use the internal node IP and Argo CD server service port. 172.30.1.2:32073
+
+Execute this command to login to Argo CD:
+
+argocd login 172.30.1.2:32073 --grpc-web --plaintext
+
+Enter admin as user and enter the password that you got previously.
+
+After successful login you can start using other commands such as listing apps or clusters.
+
+argocd cluster list --grpc-web 
+
+
+
+
+In order to interact with Argo CD using CLI or web UI, Argo CD server need to be reached. In this environment we exposed Argo CD server externally using node port.
+
+Find node01 IP addresses
+	terminal --> k get nodes -o wide
+
+# result:
+NAME           STATUS   ROLES           AGE   VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION     CONTAINER-RUNTIME
+controlplane   Ready    control-plane   21d   v1.34.1   172.30.1.2    <none>        Ubuntu 24.04.3 LTS   6.8.0-51-generic   containerd://1.7.28
+node01         Ready    <none>          21d   v1.34.1   172.30.2.2    <none>        Ubuntu 24.04.3 LTS   6.8.0-51-generic   containerd://1.7.28
+
+We need column INTERNAL-IP of node01 - 172.30.2.2
+
+
+Find Argocd service ports
+	terminal --> k get svc -n argocd
+
+# result:
+NAME                                      TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)                      AGE
+argocd-applicationset-controller          ClusterIP   10.98.122.13     <none>        7000/TCP,8080/TCP            48m
+argocd-dex-server                         ClusterIP   10.97.96.48      <none>        5556/TCP,5557/TCP,5558/TCP   48m
+argocd-metrics                            ClusterIP   10.106.247.183   <none>        8082/TCP                     48m
+argocd-notifications-controller-metrics   ClusterIP   10.105.221.222   <none>        9001/TCP                     48m
+argocd-redis                              ClusterIP   10.102.9.157     <none>        6379/TCP                     48m
+argocd-repo-server                        ClusterIP   10.100.149.16    <none>        8081/TCP,8084/TCP            48m
+argocd-server                             NodePort    10.102.163.27    <none>        80:32073/TCP,443:30164/TCP   48m	# target
+argocd-server-metrics                     ClusterIP   10.102.10.150    <none>        8083/TCP                     48m
+
+We will use 32073 port (from 80:32073) 
+
+
+Get the initial admin user password.
+	terminal --> kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d; echo
+
+	# result: NgUtzaAbrOCC6afz
+
+
+Login to ArgoCD server
+	terminal --> argocd login 172.30.2.2:32073 --insecure --grpc-web	
+
+	# if we have TLS enabled we don't have to use '--insecure'
+	# result:
+	'admin:login' logged in successfully
+	Context '172.30.2.2:32073' updated
+
+
+Verify logging into ArgoCD server
+	terminal --> argocd cluster list --grpc-web
+
+# result:
+SERVER                          NAME        VERSION  STATUS   MESSAGE                                                  PROJECT
+https://kubernetes.default.svc  in-cluster           Unknown  Cluster has no applications and is not being monitored.  
+
+
+We will go over Kubernetes managment with VMWare and Vagrant.
+	1. Install VMWare - Virtualization software that manages separate virtual PCs on your PC
+	2. Install Vagrant - automation software for VMWare
+	3. Install Helm - Kubernetes extension that help managing manifest files in Kuberentes clusters
+
+

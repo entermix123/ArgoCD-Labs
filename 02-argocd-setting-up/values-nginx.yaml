@@ -1,0 +1,26 @@
+server:
+    # Argo CD server ingress configuration
+    ingress:
+        # -- Enable an ingress resource for the Argo CD server
+        enabled: true
+        annotations:
+            nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+
+        # -- Defines which ingress controller will implement the resource
+        ingressClassName: nginx
+
+        # -- Argo CD server hostname
+        # @default -- `""` (defaults to global.domain)
+        hostname: "localhost"
+
+        # -- The path to Argo CD server
+        path: /
+
+        # -- Ingress path type. One of `Exact`, `Prefix` or `ImplementationSpecific`
+        pathType: Prefix
+
+        # -- Enable TLS configuration for the hostname defined at `server.ingress.hostname`
+        ## TLS certificate will be retrieved from a TLS secret `argocd-server-tls`
+        ## You can create this secret via `certificate` or `certificateSecret` option
+        tls: true
