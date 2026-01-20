@@ -1,0 +1,1362 @@
+Video link - https://www.youtube.com/watch?v=MY4E8TgQ5Gs&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=13
+
+Video Agenda:
+
+00:00 Canary Deployment Strategy Overview
+00:06:07 Using Rolling-update in Canary Strategy
+00:29:57 Using SetWeight&Pause in Canary Strategy
+00:50:00 Using nginx-ingress-controller in Canary Strategy
+
+Video Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+Prerequisites
+=============
+
+We should have atleast one running cluster:
+-------------------------------------------
+
+List clusters
+	terminal --> kubectl config get-clusters
+
+	# result: 
+	kind-kind
+	cluster2
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       			# current cluster
+
+
+We should have installed Argo Rollouts 
+--------------------------------------
+Section 11. Install Argo Rollouts on main cluster from the installtion guide below
+
+
+We can find prerequisites installation instructions here - https://github.com/entermix123/ArgoCD-Labs/blob/main/00-Install%20Guide/Kubernetes%20Kind%20ArgoCD%20Install%20Guide%20for%20Windows.txt
+
+
+
+Canary Deployment Strategy Overview
+===================================
+
+Canary deployment strategy exposes a set of users to the new version of the application while serving the rest of the traffic to the old version. New version can replace the old version once beeing verified to be working properly. This is achieved with canary strategy. Canary strategy can be used in several ways.
+
+Canary strategy sceniarios:
+	- RollingUpdates - continueslly scale down old app version and scale up the new app version
+		feature 1: 'maxSurge:' - max pods created above desired number of replicas during the update
+		feature 2: 'maxUnavailable:' -  max pods beaing unavaleble during the update
+
+	- SetWeight - defines the procentage of traffic that should be sent to the canary.
+
+	- traffic-management/traffic-routing
+		usage 1 - use ingress controller to manage the traffic. We will use nginx ingress controller in the examples.
+
+
+Rolling Update example:
+-----------------------
+We have 5 replicas and we want to make an update but we dont want to take down all replicas at once. We can set parameter 'maxUnavailable: 2'. This means that Kuberentes will assure that there are atleast 3 pods available durring the update. We want to ensure that durin the update we dont create too many pods at once and set parameter 'maxSurge: 1'. This means that Kubernetes wiil create 1 more pod above the desired number of replicas (5 as stated at the beggining). This means that during the update there will be a max 6 pods at all time.
+
+
+
+IMPORTANT
+=========
+
+EXPLOANATION ABOUT DOCKER KUBERNETES KIND CLUSTERS COMMUNICATION
+
+Our main (local) cluster is serving ArgoCD and Kargo Dashboard. Its configuration is as follow:
+
+kind-config-nginx.yaml
+-------------------------------------------------
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 32073				# this is HTTP
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 32074				# this is HTTPS
+    protocol: TCP
+- role: worker
+- role: worker
+-------------------------------------------------
+
+ArgoCD requires TLS/HTTPS communication and we access it on port 32074 - https://argocd.localhost:32074/applications
+Kargo Dashboard requires HTTP communication and we access it on port 32073 - http://rollouts.localhost:32073/rollouts/
+
+All configured host addresses in C:\Windows\System32\drivers\etc\hosts connected with our cluster application are accessed on port 32073 or 32074 (for local cluster) depending of on which tool we are looking at them (ArgoCD or Kargo) with.
+
+127.0.0.1 argocd.localhost			# this use HTTPS - 32074
+127.0.0.1 rollouts.localhost			# this use HTTP - 32073
+127.0.0.1 blue-green.demo			# Argo rollout - Kargo Dashboard use HTTP - 32073
+127.0.0.1 rolling-update.demo			# Argo rollout - Kargo Dashboard use HTTP - 32073
+...
+
+
+
+
+
+Using Rolling-update in Canary Strategy
+=======================================
+
+
+Create image for our applications
+---------------------------------
+We will create application image from the last section - '12 - Argo-rollouts blue-green deployment strategy' but with different name. The image is with 2 applications in it. We change the used application with change in the environment variable named 'html_name' from 'app-v1.html' to 'app-v2.html'.
+
+Go to folder 12-argo-rollouts-blue-green\blue-green-app and create the image with name 'canary'
+	terminal --> docker build -t canary .
+
+Confirm image creation
+	terminal --> docker image list
+
+Load the image in our Kubernetes clusters
+	terminal --> kind load docker-image canary --name kind
+	terminal --> kind load docker-image canary --name cluster2
+
+
+
+Rolling update
+--------------
+
+We will use files rolling-update.yaml and rolling-update-ingress.yaml
+	- rolling-update.yaml - rollout and service we will deploy
+	- rolling-update-ingress.yaml - nginx ingress controller to expose the application for access
+
+
+rolling-update.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rolling-update                      # name of the rollout
+spec:
+  replicas: 5                               # 5 replicas
+  strategy:
+    canary:
+      maxSurge: 2                           # 5 + 2 = 7 pods during the update
+      maxUnavailable: 2                     # 5 - 2 = 3 pods should be available at all time during the update
+  selector:
+    matchLabels:
+      app: rolling-update                   # selector of the update
+  template:
+    metadata:
+      labels:
+        app: rolling-update                 # label lof the app
+    spec:
+      containers:
+      - name: rolling-update                # name the update container
+        image: canary                       # used image
+        # This is the same image that we built in the previous session (v12-argo-rollouts-blue-green) , I just re-tagged it
+        imagePullPolicy: Never              # disable image pulling, we alredy loaded it into the clusters
+        env:
+        - name: html_name                   # environment variable name
+          value: "app-v1.html"              # environment variable value - change to "app-v2.html" to simulate new app version
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1
+kind: Service                       # we use one service pointing on the rollout with the selecotr
+metadata:
+  name: rolling-update              # name of the service
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rolling-update            # selector for the backend (rollout) this service is working for
+-----------------------------------------------
+
+
+rolling-update-ingress.yaml
+-----------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress                                 # ingress controller type
+metadata:
+  name: rolling-update
+spec:
+  ingressClassName: nginx                     # nginx controller
+  rules:
+  - host: rolling-update.demo                 # application host address
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rolling-update              # name of the target service defined in the rollout
+            port:
+              number: 5000
+-----------------------------------------------
+
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       argocd	# target csluter with default ns argocd
+	
+Connect to local cluster (ArgoCD host) if we are not already in it
+	terminal --> kubectl config use-context kind-kind
+
+	# result: Switched to context "kind-kind".
+
+Create 'canary' namespace on the local cluster
+	terminal --> k create ns canary
+
+	# result: namespace/canary created
+
+Set the default namespace to canary
+	terminal --> k config set-context --current --namespace=canary
+		
+	# result: Context "kind-kind" modified.
+
+Confirm context and default namespace
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       canary	# current cluster and default ns canary
+
+
+Create the rollout
+	terminal --> k apply -f rolling-update.yaml
+
+	# result: 
+	rollout.argoproj.io/rolling-update created
+	service/rolling-update created
+
+Create the ingress controller
+	terminal --> k apply -f rolling-update-ingress.yaml
+
+	# result: ingress.networking.k8s.io/rolling-update created
+
+Confirm replica set creation
+	terminal --> k get rs
+
+	# result:
+	NAME                        DESIRED   CURRENT   READY   AGE
+	rolling-update-856764b5c4   5         5         5       4m19s
+
+Confirm service creation
+	terminal --> k get svc
+
+	# result:
+	NAME             TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)    AGE
+	rolling-update   ClusterIP   10.96.7.151   <none>        5000/TCP   4m23s
+
+
+
+Configure Hosts File on Windows:	
+--------------------------------
+
+1. Open Hosts File as Administrator
+PowerShell (Run as Administrator):
+-----------------------------------------------
+terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+```
+
+**Or manually:**
+- Navigate to: `C:\Windows\System32\drivers\etc\`
+- Right-click `hosts` → Open with → Notepad (as Administrator)
+
+### 2. Add This Line at the End
+```
+127.0.0.1 rolling-update.demo
+-----------------------------------------------
+
+3. Save changes and close the file
+
+4. Flush DNS Cache (Optional but Recommended) with shell as administrator
+	terminal --> ipconfig /flushdns
+
+	# result:
+	Windows IP Configuration
+
+	Successfully flushed the DNS Resolver Cache.
+
+
+
+Access canary application on http://rolling-update.demo:32073/
+
+We can check Argo Dashboard - http://rollouts.localhost:32073/rollouts/canary
+
+
+To initiate update process we need to update item in the template section in the rollout manifest file - rolling-update.yaml so new replicaset will be created.
+
+
+rolling-update.yaml
+-----------------------------------------------
+...
+spec:
+  replicas: 5                               # 5 replicas
+  strategy:
+    canary:
+      maxSurge: 2                           # 5 + 2 = 7 pods during the update
+      maxUnavailable: 2                     # 5 - 2 = 3 pods should be available at all time during the update
+  selector:
+    matchLabels:
+      app: rolling-update                   # selector of the update
+  template:
+    metadata:
+      labels:
+        app: rolling-update                
+    spec:
+      containers:
+      - name: rolling-update               
+        image: canary                       
+        imagePullPolicy: Never              
+        env:
+        - name: html_name                   # environment variable name
+          value: "app-v1.html"              # changed to from "app-v1.html" to "app-v2.html" 
+...
+-----------------------------------------------
+save changes
+
+Apply changes of the rollout
+	terminal --> k apply -f rolling-update.yaml
+
+	# result:
+	rollout.argoproj.io/rolling-update configured
+	service/rolling-update unchanged
+
+List replicasets right after we applied the changes
+	terminal --> k get rs
+
+	# result:
+	NAME                        DESIRED   CURRENT   READY   AGE
+	rolling-update-7dc767c57c   4         4         0       1m	# new version
+	rolling-update-856764b5c4   3         3         3       3m	# old version 
+
+
+
+Replicas flags explained
+------------------------
+
+Case 1:
+
+maxUnavailable: 2
+maxSurge: 2
+
+default replicas = 5
+5 - 2 = 3 replicas should be available during the update (maxUnavailable: 2)
+5 + 2 = 7 replicas be all pods during the update (maxSurge: 2)
+
+Right after the update start we will have:
+
+3 of 7 replicas are related with the old version app
+4 of 7 replicas are related with the new version app
+
+
+Wait few minutes and list replicasets again
+	terminal --> k get rs
+
+	# result:
+	NAME                        DESIRED   CURRENT   READY   AGE
+	rolling-update-7dc767c57c   5         5         5       41m	# new version
+	rolling-update-856764b5c4   0         0         0       53m	# old version
+
+
+Delete the rollout for the next examples (cases)
+	terminal --> k delete -f rolling-update.yaml
+
+
+
+
+Case 2:
+
+maxUnavailable: 0
+maxSurge: 2
+
+default replicas = 5
+5 - 0 = 5 replicas should be available during the update (maxUnavailable: 0)
+5 + 2 = 7 replicas be all pods during the update (maxSurge: 2)
+
+Right after the update start we will have:
+
+5 of 7 are related with the old version
+2 of 7 are related with the new version
+
+
+Create the rollout with the parameters, update the version and apply changes
+
+Example list of replicasets right after starting the update
+	terminal --> k get rs
+
+	# result:
+	NAME                        DESIRED   CURRENT   READY   AGE
+	rolling-update-xxxxxxxxxx   2         2         2       1m	# new version
+	rolling-update-xxxxxxxxxx   5         5         5       3m	# old version 
+
+Delete the rollout for the next examples (cases)
+	terminal --> k delete -f rolling-update.yaml
+
+
+
+Case 3:
+
+maxUnavailable: 1
+maxSurge: 1
+
+default replicas = 3
+3 - 1 = 2 replicas should be available during the update (maxUnavailable: 1)
+3 + 1 = 4 replicas be all pods during the update (maxSurge: 1)
+
+Right after the update start we will have:
+
+2 of 4 are related with the old version
+2 of 4 are related with the new version
+
+
+Create the rollout with the parameters, update the version and apply changes
+
+Example list of replicasets right after starting the update
+	terminal --> k get rs
+
+	# result:
+	NAME                        DESIRED   CURRENT   READY   AGE
+	rolling-update-xxxxxxxxxx   2         2         2       1m	# new version
+	rolling-update-xxxxxxxxxx   2         2         2       3m	# old version 
+
+
+Delete the rollout for the next examples
+	terminal --> k delete -f rolling-update.yaml
+
+Delete the ingress controller for the next examples
+	terminal --> k delete -f rolling-update-ingress.yaml
+
+
+
+
+
+
+
+
+Using SetWeight&Pause in Canary Strategy
+========================================
+
+For this examples we will use rollouts-setweight.yaml and rollouts-setweight-ingress.yaml files
+	- rollouts-setweight.yaml - rollout and service we will deploy
+	- rollouts-setweight-ingress.yaml - nginx ingress controller to expose the application for access
+
+rollouts-setweight.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rollouts-setweight
+spec:
+  replicas: 5                              # default replicas
+  strategy:
+    canary:
+      steps:                               # steps section
+      - setWeight: 20                      # percentage of the traffic that will be sent to the new version - 1 of 5 pod
+      - pause: {}                          # require manual promotion
+      - setWeight: 40                      # 2 of 5 pods with new version
+      - pause: {duration: 10s}             # wait time until automatic promotion
+      - setWeight: 60                      # 3 of 5 pods with new version
+      - pause: {duration: 20s}             # wait time until automatic promotion
+      - setWeight: 80                      # 4 of 5 pods with new version
+      - pause: {duration: 1m}              # wait time until automatic promotion
+  selector:
+    matchLabels:
+      app: rollouts-setweight              # selector for the apps
+  template:
+    metadata:
+      labels:
+        app: rollouts-setweight            # label of the app
+    spec:
+      containers:
+      - name: rollouts-setweight           # app name
+        image: canary 
+        # This is the same image that we built in the previous session (v12-argo-rollouts-blue-green) , I just re-tagged it
+        imagePullPolicy: Never
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v1.html"             # environment variable value - change to "app-v2.html" and apply to initiate update
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rollouts-setweight                   # service name
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rollouts-setweight                  # selector for the rollout 
+-----------------------------------------------
+
+
+
+STEPS EXPLAINED
+---------------
+
+Each step in the canary section defines the percentage traffic that will be sent to the new version for the specified time.
+By default we have 5 pods so on each steps the  pods with the new version will increase.
+We also have 'round up' for percentage and replicas set in the rollout steps. 
+	- example 15% of 10 replicas = 2 pods and 85% of 10 replicas = 9 pods
+
+1st step 20% = 1 of 5 pod
+	- if pause duration is not set, we have to promote the step manually !!!
+
+2nd step 40% = 2 of 5 pods
+	- pause duration = 10s - after 10s this step will be promoted automatically
+
+3th step 60% = 3 of 5 pods
+	- pause duration = 20s - after 20s this step will be promoted automatically
+
+4th step 80% = 4 of 5 pods
+	- pause duration = 1m - after 1m this step will be promoted automatically
+
+
+
+rollouts-setweight-ingress.yaml
+-----------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rolling-update                        # controller name
+spec:
+  ingressClassName: nginx                     # controller type
+  rules:
+  - host: rollouts-setweight.demo             # application host address
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rollouts-setweight          # service name that the contoller will work with
+            port:
+              number: 5000
+-----------------------------------------------
+
+
+Deploy the rollout and the service
+	terminal --> k apply -f rollouts-setweight.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-setweight created
+	service/rollouts-setweight created
+	
+Deploy ingress controller
+	terminal --> k apply -f rollouts-setweight-ingress.yaml
+
+	# result: ingress.networking.k8s.io/rolling-update configured
+	
+
+
+Configure Hosts File on Windows:	
+--------------------------------
+
+1. Open Hosts File as Administrator
+PowerShell (Run as Administrator):
+-----------------------------------------------
+terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+```
+
+**Or manually:**
+- Navigate to: `C:\Windows\System32\drivers\etc\`
+- Right-click `hosts` → Open with → Notepad (as Administrator)
+
+### 2. Add This Line at the End
+```
+127.0.0.1 rollouts-setweight.demo
+-----------------------------------------------
+
+3. Save changes and close the file
+
+4. Flush DNS Cache (Optional but Recommended) with shell as administrator
+	terminal --> ipconfig /flushdns
+
+	# result:
+	Windows IP Configuration
+
+	Successfully flushed the DNS Resolver Cache.
+
+
+Access canary application on http://rollouts-setweight.demo:32073/
+
+We can check Argo Dashboard - http://rollouts.localhost:32073/rollouts/canary
+	- In the rollouts-setweight details we can see a list of the configured steps
+
+
+
+To initiate update process we need to update item in the template section in the rollout manifest file - rollouts-setweight.yaml
+
+rollouts-setweight.yaml
+-----------------------------------------------
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v1.html"             # environment variable value - change to "app-v2.html" and apply to initiate update
+        ports:
+...
+-----------------------------------------------
+save changes
+
+Apply changes of the rollout
+	terminal --> k apply -f rollouts-setweight.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-setweight configured
+	service/rollouts-setweight unchanged
+
+
+We can check Argo Dashboard - http://rollouts.localhost:32073/rollouts/canary
+	- We can see a new replicaset with one pod (20% as configured) is created
+	- We can see the status of the new version
+	- We can manually promote the first step as configured
+
+
+We can test the procentage of the traffic as we refresh the application - http://rollouts-setweight.demo:32073/
+Approximatelly 1 of 5 times (20%) when we refresh the page we should see the new version of the application.
+
+Now we promote manually with the button 'Promote' or via CLI
+	terminal --> kargo promote rollouts-setweight
+
+	# result: rollout 'rollouts-setweight' promoted
+
+
+We can see the progress of the deployment in the Dashboard - http://rollouts.localhost:32073/rollouts/canary
+After the configured pause time for each step, new pod with the new version will be deployed.
+The pods with the old version will be scaled down also one by one.
+At the end of the setps all pods will run the new version of the application.
+
+
+Delete the rollout for the next cases
+	terminal --> k delete -f rollouts-setweight.yaml
+
+
+
+STEPS OPTIONS
+-------------
+In this canary strategy we also have 'round up' feature.
+
+
+Case 2:
+
+Default replicas = 5
+setWeight = 30			
+	- 30% of 5 replicas = 1.5 - this will be round up to 2
+	- 70% of 5 repliocas = 3.5 - this will be rounded up to 4
+	- total 6 pods will run at all time during the update - 2 pods with new version and 4 with the old version
+ 
+pause: {}			# manual promotion
+
+
+We configure only 1 step in the rollout
+
+rollouts-setweight.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rollouts-setweight
+spec:
+  replicas: 5                              # default replicas
+  strategy:
+    canary:
+      steps:                               # steps section
+      - setWeight: 30                      # percentage sent to the new version - 2 of 5 pods - rounded up from 1.5
+      - pause: {}                          # require manual promotion
+  selector:
+    matchLabels:
+      app: rollouts-setweight              # selector for the apps
+...
+-----------------------------------------------
+
+Deploy the rollout
+	terminal --> k apply -f rollouts-setweight.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-setweight created
+	service/rollouts-setweight created
+
+
+To initiate update process we need to update item in the template section in the rollout manifest file - rollouts-setweight.yaml
+
+
+rollouts-setweight.yaml
+-----------------------------------------------
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v1.html"             # environment variable value - change to "app-v2.html" and apply to initiate update
+        ports:
+...
+-----------------------------------------------
+save changes
+
+Apply changes of the rollout
+	terminal --> k apply -f rollouts-setweight.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-setweight configured
+	service/rollouts-setweight unchanged
+
+
+In Dajsboard - http://rollouts.localhost:32073/rollouts/canary we can see that
+	- 2 pods are running with new version 
+	- 4 pods are running with the old version
+
+
+Example list of replicasets right after starting the update
+	terminal --> k get rs
+
+	# result:
+	NAME                        DESIRED   CURRENT   READY   AGE
+	rolling-update-xxxxxxxxxx   2         2         2       1m	# new version
+	rolling-update-xxxxxxxxxx   4         4         4       3m	# old version 
+
+
+We can test the procentage of the traffic as we refresh the application - http://rollouts-setweight.demo:32073/
+Approximatelly 2 of 6 times (30%) when we refresh the page we should see the new version of the application.
+
+Now we promote manually with the button 'Promote' or via CLI
+	terminal --> kargo promote rollouts-setweight
+
+	# result: rollout 'rollouts-setweight' promoted
+
+
+Now all replicas are running the new version of the application (5 pods by default)
+
+
+Delete the rollout for the next examples
+	terminal --> k delete -f rollouts-setweight.yaml
+
+	# result:
+	rollout.argoproj.io "rollouts-setweight" deleted from canary namespace
+	service "rollouts-setweight" deleted from canary namespace
+
+
+Delete the ingress controller for the next examples
+	terminal --> k delete -f rollouts-setweight-ingress.yaml
+
+
+
+
+
+Using nginx-ingress-controller in Canary Strategy
+=================================================
+
+For nginx-ingress-controller strategy we have multiple obhjects
+	- rollout
+	- service 1
+	- service 2
+	- ingress controller
+
+
+Work Explanation
+----------------
+default replicas: 1
+
+Before update the selector 'rollouts-pod-template-hash: xxxxxxxxxx' is added by Argo rollouts controller to both services. 
+Both services are pointing to the only version. After the update starts, second pod with new version is created and the rollout modify the 'rollouts-pod-template-hash: xxxxxxxxxx' selector of the canary-service to point at the pod with the new version of the app.
+The stable-service's 'rollouts-pod-template-hash: xxxxxxxxxx' selector is pointing at the old version replica.
+
+The ingress cotroller we are createing is pointing to the stabels (old version) service of the application.
+Second ingress controller is created by Argo rollouts controller and which is pointing at the canary (new version) service of the app.
+
+
+
+We will use 2 files - rollouts-traffic-management.yaml and rollouts-traffic-management-ingress.yaml
+
+rollouts-traffic-management.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rollouts-traffic-management              # rollout name
+spec:
+  replicas: 5                                    # default replicas
+  strategy:
+    canary:                                      # canary strategy
+      # dynamicStableScale: true
+      # abortScaleDownDelaySeconds: 20           
+      canaryService: canary-service              # connected canary service
+      stableService: stable-service              # connected stable service
+      trafficRouting:                                  # routing management
+        nginx:
+          stableIngress: rollouts-traffic-management   # connnected nginx ingress controller
+      steps:
+      - setWeight: 20                                  # Using Setweight Only - 1 of 5 pods on this step
+      - pause: {}                                      # manual promotion
+      # ....................
+      # - setCanaryScale: # Using SetCanaryScale with SetWeight
+      #    weight: 40 
+      # - setWeight: 40
+      # - pause: {}
+  selector:
+    matchLabels:
+      app: rollouts-traffic-management
+  template:
+    metadata:
+      labels:
+        app: rollouts-traffic-management
+    spec:
+      containers:
+      - name: rollouts-traffic-management
+        image: canary 
+        # This is the same image that we built in the previous session (v12-argo-rollouts-blue-green) , I just re-tagged it
+        imagePullPolicy: Never
+        env:
+        - name: html_name
+          value: "app-v1.html"
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-service                         # service 1 name
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rollouts-traffic-management           # selector for the rollout
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stable-service                         # service 2 name
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rollouts-traffic-management           # selector for the rollout
+-----------------------------------------------
+
+
+
+rollouts-traffic-management-ingress.yaml
+-----------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rollouts-traffic-management                 # ingress controller name 
+spec:
+  ingressClassName: nginx                           # class of the ingress controller
+  rules:
+  - host: rollouts-traffic-management.demo          # domain name of the application
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: stable-service                    # service the controller is working with
+            port:
+              number: 5000
+-----------------------------------------------
+
+
+Deploy the rollout
+	terminal --> k apply -f rollouts-traffic-management.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-traffic-management created
+	service/canary-service created
+	service/stable-service created
+
+
+Deploy ingress controller
+	terminal --> k apply -f rollouts-traffic-management-ingress.yaml
+
+	# result: ingress.networking.k8s.io/rollouts-traffic-management created
+
+List ingress controllers
+	terminal --> k get ingress
+
+# result:
+NAME                                                             CLASS   HOSTS                              ADDRESS     PORTS   
+rollouts-traffic-management                                      nginx   rollouts-traffic-management.demo   localhost   80      
+rollouts-traffic-management-rollouts-traffic-management-canary   nginx   rollouts-traffic-management.demo   localhost   80      
+
+We have second ingress controller except the one we created - rollouts-traffic-management-rollouts-traffic-management-canary.
+This ingress controller is created by Argo rollouts controller. 
+
+Print the configuration of this ingress controller
+	terminal --> k get ingress rollouts-traffic-management-rollouts-traffic-management-canary -o yaml
+
+-----------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/canary: "true"    # canary flag enabled - this controller works with canary (new version) service 
+    nginx.ingress.kubernetes.io/canary-weight: "0"  # procentage traffic routed to the canary (new version) service
+  creationTimestamp: "2026-01-08T07:10:18Z"
+  generation: 1
+  name: rollouts-traffic-management-rollouts-traffic-management-canary
+  namespace: canary
+  ownerReferences:
+  - apiVersion: argoproj.io/v1alpha1
+    blockOwnerDeletion: true
+    controller: true
+    kind: Rollout
+    name: rollouts-traffic-management
+    uid: b7463aef-9970-484a-a9e2-9820f118f099
+  resourceVersion: "104124"
+  uid: d2659a00-9391-4955-9229-2780b8847213
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: rollouts-traffic-management.demo
+    http:
+      paths:
+      - backend:
+          service:
+            name: canary-service                      # pointing at the canary service (new version) when deployed
+            port:
+              number: 5000
+        path: /
+        pathType: Prefix
+status:
+  loadBalancer:
+    ingress:
+    - hostname: localhost
+-----------------------------------------------
+
+This controller is pointing at the service that works with the new version of the app.
+It has two important annotations
+	- nginx.ingress.kubernetes.io/canary: "true" - pointing at the canary (new version) service 
+	- nginx.ingress.kubernetes.io/canary-weight: "0" - procentage traffic routed to the canary (new version) service
+
+
+
+
+
+
+
+Configure Hosts File on Windows:	
+--------------------------------
+
+1. Open Hosts File as Administrator
+PowerShell (Run as Administrator):
+-----------------------------------------------
+terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+```
+
+**Or manually:**
+- Navigate to: `C:\Windows\System32\drivers\etc\`
+- Right-click `hosts` → Open with → Notepad (as Administrator)
+
+### 2. Add This Line at the End
+```
+127.0.0.1 rollouts-traffic-management.demo
+-----------------------------------------------
+
+3. Save changes and close the file
+
+4. Flush DNS Cache (Optional but Recommended) with shell as administrator
+	terminal --> ipconfig /flushdns
+
+	# result:
+	Windows IP Configuration
+
+	Successfully flushed the DNS Resolver Cache.
+
+
+Access canary application on http://rollouts-traffic-management.demo:32073/
+
+We can check Argo Dashboard - http://rollouts.localhost:32073/rollouts/canary
+
+
+
+Initiate update process by changing the version of the used application in rollout manifest file.
+
+rollouts-traffic-management.yaml
+-----------------------------------------------
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v2.html"             # environment variable value - change to "app-v2.html" and apply to initiate update
+...
+-----------------------------------------------
+save changes
+
+Apply changes of the rollout
+	terminal --> k apply -f rollouts-traffic-management.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-traffic-management configured
+	service/canary-service unchanged
+	service/stable-service unchanged
+
+
+Opne Argo Dashboard - http://rollouts.localhost:32073/rollouts/canary
+We can see that new replicaset as Revision 2 with one pod (1 of 5 - 20%) is created.
+
+We can test the procentage of the traffic as we refresh the application - http://rollouts-traffic-management.demo:32073/
+Approximatelly 1 of 5 times (20%) when we refresh the page we should see the new version of the application.
+
+
+Now we promote manually with the button 'Promote' or via CLI
+	terminal --> kargo promote rollouts-traffic-management
+
+	# result: rollout 'rollouts-traffic-management' promoted
+
+
+DEFAULT UPDATE BEHAVIOR
+-----------------------
+Go to Argo Dashboard - http://rollouts.localhost:32073/rollouts/canary
+We can see that the new replicaset (new version) is fully scaled up and the old replicaset (old version) is also fully scaled up. After 30 seconds the old replicaset is scaled down. This 30 sec period can be useful in abort cases - no scale up (delay) of the old version is needed. The disadvantage is that resources are doubled during the update.
+
+
+MANAGED UPDATE BEHAVIOR 1
+-------------------------
+We can modify the scale process of the replicasets during update.
+
+Modify the manifest file of the rollout  in the strategy section and add flags
+	- 'dynamicStableScale: true' - the old version will be scaled down dynamically with the % configured in the steps
+	- 'abortScaleDownDelaySeconds: 20' - if we abort the rollout, the new revision will be aborted in 20 seconds (optional)
+
+Change the version of the used application and apply the manifest to initiate update.
+
+
+rollouts-traffic-management.yaml
+-----------------------------------------------
+...
+spec:
+  replicas: 5                                    # default replicas
+  strategy:
+    canary:
+      dynamicStableScale: true                   # dynamic stable scale 
+      # abortScaleDownDelaySeconds: 20           # scale down deplay time in case of abortion of the new revision 
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v1.html"             # environment variable value - change to "app-v1.html" and apply to initiate update
+...
+-----------------------------------------------
+save changes
+
+Apply changes of the rollout
+	terminal --> k apply -f rollouts-traffic-management.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-traffic-management configured
+	service/canary-service unchanged
+	service/stable-service unchanged
+
+
+Go to Argo Dashboard - http://rollouts.localhost:32073/rollouts/canary
+We can see that new replicaset with one pod is created and one of the pods in the old version replicaset is terminating.
+
+Now we promote manually with the button 'Promote' or via CLI
+	terminal --> kargo promote rollouts-traffic-management
+
+	# result: rollout 'rollouts-traffic-management' promoted
+
+Old version replicaset is terminated (scaled down) and the new revision replicaset is fully scaled up.
+
+Delete the rollout for the next example
+	terminal --> k delete -f rollouts-traffic-management.yaml
+
+	# result:
+	rollout.argoproj.io "rollouts-traffic-management" deleted from canary namespace
+	service "canary-service" deleted from canary namespace
+	service "stable-service" deleted from canary namespace
+
+Delete the ingress controller for the next example
+	terminal --> k delete -f rollouts-traffic-management-ingress.yaml
+
+	# result: ingress.networking.k8s.io "rollouts-traffic-management" deleted from canary namespace
+
+
+
+
+
+
+MANAGED UPDATE BEHAVIOR 2
+-------------------------
+
+In this scenarion we are going to use different steps configuration.
+
+
+STEPS EXPLAINED
+---------------
+
+Example scenario
+
+Default replicas: 5
+
+- setCanaryScale:          # Using SetCanaryScale with SetWeight
+    weight: 60
+
+This mean that hte argo rollouts controoller will create new replicaset with 60% of the default replicas count when update is initiated (60% of 5 = 3 replicas).
+
+- setWeight: 40
+
+This means that 40% of the traffic will be sent to created replicaset for the new revision.
+
+- pause: {} - manual promotion
+
+
+
+Use rollout configuration below:
+
+rollouts-traffic-management.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rollouts-traffic-management              # rollout name
+spec:
+  replicas: 5                                    # default replicas
+  strategy:
+    canary:                                      # canary strategy
+      dynamicStableScale: true                   # dynamic stable scale
+      # abortScaleDownDelaySeconds: 20           # scale down deplay time in case of abortion of the new revision 
+      canaryService: canary-service              # connected canary service
+      stableService: stable-service              # connected stable service
+      trafficRouting:                                  # routing management
+        nginx:
+          stableIngress: rollouts-traffic-management   # connnected nginx ingress controller
+      steps:
+      # - setWeight: 20                                  # Using Setweight Only - 1 of 5 pods on this step
+      # - pause: {}                                      # manual promotion
+      # ....................
+      - setCanaryScale:          # Using SetCanaryScale with SetWeight
+         weight: 40              # 40% of default replicas created as new revision replicaset
+         # replicas: 2           # specify pods insted of weight
+      - setWeight: 40            # 40% of the traffic sent to the new revision replicaset's pods
+      - pause: {}                # manual promotion
+  selector:
+    matchLabels:
+      app: rollouts-traffic-management
+  template:
+    metadata:
+      labels:
+        app: rollouts-traffic-management
+    spec:
+      containers:
+      - name: rollouts-traffic-management
+        image: canary 
+        # This is the same image that we built in the previous session (v12-argo-rollouts-blue-green) , I just re-tagged it
+        imagePullPolicy: Never
+        env:
+        - name: html_name
+          value: "app-v1.html"
+        ports:
+        - containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-service                         # service 1 name
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rollouts-traffic-management           # selector for the rollout
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stable-service                         # service 2 name
+spec:
+  ports:
+  - port: 5000
+    targetPort: 5000
+  selector:
+    app: rollouts-traffic-management           # selector for the rollout
+-----------------------------------------------
+
+Deploy the rollout
+	terminal --> k apply -f rollouts-traffic-management.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-traffic-management created
+	service/canary-service created
+	service/stable-service created
+
+
+Deploy ingress controller
+	terminal --> k apply -f rollouts-traffic-management-ingress.yaml
+
+	# result: ingress.networking.k8s.io/rollouts-traffic-management created
+
+
+Configure Hosts File on Windows:	If not configured
+--------------------------------
+
+1. Open Hosts File as Administrator
+PowerShell (Run as Administrator):
+-----------------------------------------------
+terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+```
+
+**Or manually:**
+- Navigate to: `C:\Windows\System32\drivers\etc\`
+- Right-click `hosts` → Open with → Notepad (as Administrator)
+
+### 2. Add This Line at the End
+```
+127.0.0.1 rollouts-traffic-management.demo
+-----------------------------------------------
+
+3. Save changes and close the file
+
+4. Flush DNS Cache (Optional but Recommended) with shell as administrator
+	terminal --> ipconfig /flushdns
+
+	# result:
+	Windows IP Configuration
+
+	Successfully flushed the DNS Resolver Cache.
+
+
+Access canary application on http://rollouts-traffic-management.demo:32073/
+
+We can check Argo Dashboard - http://rollouts.localhost:32073/rollouts/canary
+
+
+
+Initiate update process by changing the version of the used application in rollout manifest file.
+
+rollouts-traffic-management.yaml
+-----------------------------------------------
+...
+        env:
+        - name: html_name                  # environment variable name
+          value: "app-v2.html"             # environment variable value - change to "app-v2.html" and apply to initiate update
+...
+-----------------------------------------------
+save changes
+
+Apply changes of the rollout
+	terminal --> k apply -f rollouts-traffic-management.yaml
+
+	# result:
+	rollout.argoproj.io/rollouts-traffic-management configured
+	service/canary-service unchanged
+	service/stable-service unchanged
+
+
+Go to Argo Dashboard - http://rollouts.localhost:32073/rollouts/canary
+We can see that new replicaset with 2 pod is created and 2 of the pods in the old version replicaset are terminating and 40% of the traffic is sent to this 2 replicas.
+We can test the procentage of the traffic as we refresh the application - http://rollouts-traffic-management.demo:32073/
+Approximatelly 2 of 5 times (40%) when we refresh the page we should see the new version of the application.
+
+
+We can also print the ingress controller created by the rollout and check the percentage sent to the canary service
+	terminal --> k get ingress rollouts-traffic-management-rollouts-traffic-management-canary -o yaml
+
+-----------------------------------------------
+...
+  annotations:
+    nginx.ingress.kubernetes.io/canary: "true"    
+    nginx.ingress.kubernetes.io/canary-weight: "40"   # this is the percentage for the new revision
+...
+-----------------------------------------------
+
+
+Check replicasets hashes
+	terminal --> k get rs
+
+	# result:
+	NAME                                     DESIRED   CURRENT   READY   AGE
+	rollouts-traffic-management-6d74c56b85   2         2         2       26m   # new revision
+	rollouts-traffic-management-7586bf6678   3         3         3       37m   # old revision
+
+
+Check the hash selectors of the services
+	terminal --> k get svc
+
+	# result:
+	NAME             TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+	canary-service   ClusterIP   10.96.254.173   <none>        5000/TCP   36m
+	stable-service   ClusterIP   10.96.47.95     <none>        5000/TCP   36m
+
+
+Print the canary and stabel services to see the hash selector
+	terminal --> k get svc canary-service -o yaml
+	terminal --> k get svc stable-service -o yaml
+
+Both services have selector section with the hash selector for the rollout they are pointing to.
+
+canary-service
+-----------------------------------------------
+...
+  selector:
+    app: rollouts-traffic-management
+    rollouts-pod-template-hash: 6d74c56b85	# new revision
+...
+-----------------------------------------------
+
+stabel-service
+-----------------------------------------------
+...
+  selector:
+    app: rollouts-traffic-management
+    rollouts-pod-template-hash: 7586bf6678	# old revision
+...
+-----------------------------------------------
+
+
+
+Now we promote manually with the button 'Promote' or via CLI
+	terminal --> kargo promote rollouts-traffic-management
+
+	# result: rollout 'rollouts-traffic-management' promoted
+
+Old version replicaset is terminated (scaled down) and the new revision replicaset is fully scaled up.
+
+
+
+
+CLEAN THE CLUSTER
+-----------------
+Delete the rollout
+	terminal --> k delete -f rollouts-traffic-management.yaml
+
+	# result:
+	rollout.argoproj.io "rollouts-traffic-management" deleted from canary namespace
+	service "canary-service" deleted from canary namespace
+	service "stable-service" deleted from canary namespace
+
+Delete the ingress controller
+	terminal --> k delete -f rollouts-traffic-management-ingress.yaml
+
+	# result: ingress.networking.k8s.io "rollouts-traffic-management" deleted from canary namespace
+
+Delete 'canary' namespace to keep the cluster clean nad fresh
+	terminal --> k delete ns canary
+	
+	# result: namespace "canary" deleted
+
+
+
+
+
+
+
+
+
