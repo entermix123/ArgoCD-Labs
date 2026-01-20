@@ -1,0 +1,1476 @@
+Video link - https://www.youtube.com/watch?v=ex-F_VXNYNA&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=18
+
+Video Agenda: 
+
+00:00 09:12 Set Up overview 
+09:12       Aego Events components
+
+
+Video Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+Prerequisites
+=============
+
+1. We should have atleast one running cluster:
+----------------------------------------------
+
+List clusters
+	terminal --> kubectl config get-clusters
+
+	# result: 
+	kind-kind
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	*         kind-kind       kind-kind       kind-kind       			# current cluster
+
+
+2. We need to have installed:
+-----------------------------
+	- ArgoCD
+	- Argo Rollouts & Argo CLI (Kargo)
+	- Argo Workflows
+	- Nexus - private image registry
+
+We can find prerequisites installation instructions and resources here - https://github.com/entermix123/ArgoCD-Labs/blob/main/00-Install%20Guide/Kubernetes%20Kind%20ArgoCD%20Install%20Guide%20for%20Windows.txt
+
+
+
+
+2. Set Up Working namepsace and MinIO artifact repository
+=========================================================
+
+Create working namespace 'argo-events'
+	terminal --> kubectl create ns argo-events
+
+	# result: argo-events/workflows created
+
+
+IF ARGO WORKFLOWS IN INSTALLED WITH HELM
+----------------------------------------
+
+Scenario 1 - Working with the default user account of the working namespace
+----------
+
+Give workflow-controller permissions to act with pods in the working namespace:
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:my-workflow-argo-workflows-workflow-controller -n argo-events
+
+Give permissions to the working namespace's default service account:
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
+
+
+
+Scenario 2 - Create separate service account for the working namespace
+----------
+
+Give workflow-controller permissions to act with pods in the working namespace:
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:my-workflow-argo-workflows-workflow-controller -n argo-events
+
+Create service account in working 'argo-events' namespace
+	terminal --> kubectl create serviceaccount argo-workflows -n argo-events
+
+Create rolebinding for the created service account and give it admin rights
+	terminal --> kubectl create rolebinding argo-workflows-admin --clusterrole=admin --serviceaccount=argo-events:argo-workflows -n argo-events
+
+
+
+IF ARGO WORKFLOWS IN INSTALLED MANUALLY
+---------------------------------------
+
+Scenario 1 - Working with the default service account
+----------
+Give workflow-controller permissions (NOTE: different service account name)
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:argo -n argo-events
+
+Give permissions to working namespace's default service account
+	terminal --> kubectl create rolebinding default-admin --clusterrole=admin --serviceaccount=argo-events:default -n argo-events
+
+
+Scenario 2 - Create separate service account
+----------
+Give workflow-controller permissions (NOTE: different service account name)
+	terminal --> kubectl create rolebinding workflow-controller-admin --clusterrole=admin --serviceaccount=argo:argo -n argo-events
+
+Create service account
+	terminal --> kubectl create serviceaccount argo-workflows -n argo-events
+
+Give it permissions
+	terminal --> kubectl create rolebinding argo-workflows-admin --clusterrole=admin --serviceaccount=argo-events:argo-workflows -n argo-events
+
+
+
+
+
+
+
+3. MinIO Artifact repository 
+============================
+
+
+MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+
+Prerequisites
+	- kubectl CLI tool
+	- Helm CLI tool
+
+MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+
+INSTALL MINIO WIHT HELM
+-----------------------
+1. Install MinIO helm repository on our PC
+	terminal --> helm repo add minio https://charts.min.io/
+	terminal --> helm repo update
+
+
+2. Install MinIO chart
+	terminal --> helm install argo-artifacts minio/minio --set resources.requests.memory=512Mi --set replicas=1 --set persistence.enabled=false --set mode=standalone --set rootUser=admin --set rootPassword=password123 --set buckets[0].name=my-bucket --set buckets[0].policy=none --set buckets[0].purge=false -n argo
+
+
+3. Create credentials secret in working namespace
+	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n argo-events
+
+	# result: secret/my-minio-cred created
+
+
+4. Set Ingress resource for MinIO to be externally accessed 
+
+minio-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-console-ingress
+  namespace: argo
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: minio.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-artifacts-minio-console
+            port:
+              number: 9001
+-------------------------------------------------
+
+Apply the ingress manifest
+	terminal --> k apply -f minio-ingress.yaml -n argo
+
+	# result: ingress.networking.k8s.io/minio-console-ingress created
+
+	
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 minio.localhost'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim /etc/hosts
+	- Add '127.0.0.1 minio.localhost'
+	- save changes and exit - escape, :wq!, enter
+
+
+
+ACCESS MINIO
+------------
+
+Decode the username (rootUser) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootUser}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: admin
+
+Decode the password (rootPassword) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootPassword}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: password123
+
+
+Access the MinIO app on http://minio.localhost:32073/login
+	- admin
+	- password123
+
+We can create bucket if we haven't with the installation command.
+Create a bucket named 'my-bucket'. We will store our artifacts in this bucket.
+
+
+
+USE MINIO
+---------
+
+Set configmap to grand Argo Workflows previleges to use artifacts in MinIO in the 'argo-events' namespace
+
+To use artifacts we need to configure MinIO repository to store the artifacts from the 'argo-event' namespace. MinIO repository is configured in artifact-repository-cm.yaml configmap file below.
+
+artifact-repository-cm.yaml
+-------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # If you want to use this config map by default, name it "artifact-repositories". Otherwise, you can provide a reference to a
+  # different config map in `artifactRepositoryRef.configMap` in the workflow.
+  name: artifact-repository           # this name is not the default name
+  annotations:
+    # v3.0 and after - if you want to use a specific key, put that key into this annotation.
+    workflows.argoproj.io/default-artifact-repository: minio-artifact-repo
+data:
+  minio-artifact-repo: |
+    s3:
+      bucket: my-bucket
+      endpoint: argo-artifacts-minio.argo:9000
+      insecure: true
+      accessKeySecret:
+        name: my-minio-cred
+        key: access-key 
+      secretKeySecret:
+        name: my-minio-cred
+        key: secret-key
+-------------------------------------------------
+
+Apply the configmap for artifact repository
+	terminal --> k apply -f artifact-repository-cm.yaml -n argo-events
+
+	# result: configmap/artifact-repository created
+
+
+
+
+
+
+
+3. Install and configure Nexus image registry
+=============================================
+
+1. Download and install Java from: https://www.oracle.com/java/technologies/downloads/#jdk25-windows
+
+	Confirm java installation
+		terminal --> java -version
+
+2 Download Nexus Repository OSS (Open Source) for Windows - https://www.sonatype.com/products/nexus-community-edition-download
+
+3. Install Nexus
+	- unarchive on the PC and navigate to the folder
+	- Open shell as administrator and run
+		terminal --> .\install-nexus-service.bat
+
+4. Start Nexus service
+	terminal --> net start SonatypeNexusRepository
+
+	Check if port 8081 is listening
+		terminal --> netstat -ano | findstr :8081
+
+5. Login to Nexus on http://localhost:8081/#login
+
+	Find the initial generated credentials in the installed directory 'sonatype-work\nexus3\admin.password' or with shell
+		terminal --> type E:\Installed\nexus-3.88.0-08-win-x86_64\sonatype-work\nexus3\admin.password
+
+	Login to the app and finish the installtion. Relogin.
+		Username: admin
+		Password: admin123		(default)
+
+
+Create Nexus repository - example usage
+---------------------------------------
+- Open Nexus - http://localhost:8081
+- Go to Settings/Repositories/Create Repository/docker(hosted)
+	- Name: argo-demo
+	- Other Connectors
+		- HTTP: 8085
+	- Docker Registry API Support
+		Select Checkbox "Allow clients to use the V1 API to interact with this repository"
+	- Create Repository
+
+- Go to Settings/Security/Realms
+	- Set Docker Bearer Token Realm to Active
+	- Save
+
+ 
+
+Configure Docker Desktop to communicate with the created repository
+	- Open Docker/Settings/Docker Engine
+	- Add
+	-------------------------------------------------
+	{
+	  "insecure-registries": ["localhost:8085"]
+	}
+	-------------------------------------------------
+	- Apply and Restart
+
+
+
+Test Docker connection with Nexus by pushing the image created earlier
+	Login to Nesus true the configured address
+		terminal --> docker login host.docker.internal:8085
+		terminal --> admin
+		terminal --> nexsus_password
+
+	Retag (rename) and push the image we created earlier to the Nexus repository
+		terminal --> docker tag nginx:v1 host.docker.internal:8085/argo-demo/nginx:alpine
+		terminal --> docker push host.docker.internal:8085/argo-demo/nginx:alpine
+
+	The image should be visualized in the Nexus repository
+		- Go to http://localhost:8081/#browse/browse
+		- Then navigate to v2/argo-demo/nginx/tags
+
+
+
+
+Configure Argo Workflows to pull/push images from/to Nexus
+----------------------------------------------------------
+
+We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
+
+Configure Argo Workflows to communicate with Nexus repository
+	- Open Docker/Settings/Docker Engine
+	- Add
+	-------------------------------------------------
+	{
+	  "insecure-registries": ["localhost:8085", "host.docker.internal:8085"]
+	}
+	-------------------------------------------------
+	- Apply and Restart
+
+
+
+Configure Argo Workflows to pull images from Nexus
+--------------------------------------------------
+
+
+Create containerd daemonset configuration
+
+containerd-config-daemonset.yaml
+-------------------------------------------------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: containerd-registry-config
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: containerd-registry-config
+  template:
+    metadata:
+      labels:
+        name: containerd-registry-config
+    spec:
+      hostPID: true
+      hostNetwork: true
+      initContainers:
+      - name: configure-containerd
+        image: alpine:latest
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          
+          # Check if configuration already exists
+          if grep -q "host.docker.internal:8085" /host/etc/containerd/config.toml 2>/dev/null; then
+            echo "Registry configuration already exists, skipping..."
+            exit 0
+          fi
+          
+          # Append registry configuration
+          cat >> /host/etc/containerd/config.toml << 'EOF'
+
+          [plugins."io.containerd.grpc.v1.cri".registry.mirrors."host.docker.internal:8085"]
+            endpoint = ["http://host.docker.internal:8085"]
+          [plugins."io.containerd.grpc.v1.cri".registry.configs."host.docker.internal:8085".tls]
+            insecure_skip_verify = true
+          EOF
+          
+          echo "Configuration added successfully"
+          
+          # Find and restart containerd process
+          CONTAINERD_PID=$(nsenter -t 1 -m -u -i -n -p pgrep containerd | head -n 1)
+          if [ -n "$CONTAINERD_PID" ]; then
+            echo "Sending SIGHUP to containerd (PID: $CONTAINERD_PID)"
+            nsenter -t 1 -m -u -i -n -p kill -HUP $CONTAINERD_PID
+            sleep 2
+            echo "Containerd reloaded"
+          else
+            echo "Warning: Could not find containerd process"
+          fi
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: containerd-config
+          mountPath: /host/etc/containerd
+      containers:
+      - name: pause
+        image: registry.k8s.io/pause:3.9
+        resources:
+          requests:
+            cpu: 1m
+            memory: 4Mi
+      volumes:
+      - name: containerd-config
+        hostPath:
+          path: /etc/containerd
+          type: Directory
+      tolerations:
+      - operator: Exists
+-------------------------------------------------
+
+Apply the deamonset
+	terminal --> kubectl apply -f containerd-config-daemonset.yaml
+
+	# result: daemonset.apps/containerd-registry-config created
+
+Test nodes communication
+	terminal --> k get nodes
+
+Wait 2 minutes and delete the daemonset
+	terminal --> kubectl delete -f containerd-config-daemonset.yaml
+
+
+
+Give Argo Workflows access to Nexus
+-----------------------------------
+
+For this task we need to create Docker secret called 'docker-config-secret' in our Argo Workflows working 'argo-events' namespace. We have to mount our docker credentials to this sescret.
+
+We need to create docker-config.json file and set the Nexus credentials so the workflow can pull and push images.
+
+1. Encode the nexus creadentials with shell
+	terminal --> $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("admin:admin123"))
+$auth
+	result: YWRtaW46YWRtaW4xMjM=
+
+2. Create docker-config.json
+-----------------------------------------
+{
+  "auths": {
+    "host.docker.internal:8085": {
+      "auth": "YWRtaW46YWRtaW4xMjM="
+    }
+  }
+}
+-----------------------------------------
+
+From the folder location create Docker secret
+	terminal --> kubectl create secret generic docker-config-secret --from-file=config.json=./docker-config.json -n argo-events
+
+	# result: secret/docker-config-secret created
+
+
+
+
+
+
+
+
+
+In this section we will set complete CI/CD pipeline automatization with ArgoCD. We will configure 
+	1. Creating GitLab private repository and set projects
+	1. Working namespace
+	2. MinIO Artifact repository 
+	3. Install and configure Nexus image registry
+	4. Running ArgoCD project including Nexus Image registry
+	5. Argo Events to trigger our workflow
+
+
+
+
+
+5. Argo Events to trigger our workflow
+======================================
+
+The official Argo Events page - https://argoproj.github.io/argo-events/
+What Argo Events can work with - https://argoproj.github.io/argo-events/#triggers
+
+We will use Argo Events to trigger our Argo Workflows
+
+
+
+
+Install Argo Events
+-------------------
+
+WE NEED TO HAVE INSTALLED ARGO WORKFLOWS TO INSTALL ARGO EVENTS - https://argoproj.github.io/argo-events/quick_start/
+
+Official Installation instructions - https://argoproj.github.io/argo-events/installation/
+
+1. Create argo events namespace
+	terminal --> kubectl create namespace argo-events
+
+
+2. Deploy Argo Events SA, ClusterRoles, and Controller for Sensor, EventBus, and EventSource
+	terminal --> kubectl apply -f https://raw.githubusercontent.com/argoproj/argo-events/stable/manifests/install.yaml
+	terminal -> kubectl apply -f https://raw.githubusercontent.com/argoproj/argo-events/stable/manifests/install-validating-webhook.yaml
+
+
+3. Deploy the eventbus
+	terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/stable/examples/eventbus/native.yaml
+
+
+4. Create a service account with RBAC settings to allow the sensor to trigger workflows, and allow workflows to function
+	Sensor RBAC - allows sensor to trigger workflows
+		terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/sensor-rbac.yaml
+
+	Workflow RBAC - allows workflows to function properly
+		terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/workflow-rbac.yaml
+
+
+
+
+
+
+
+
+
+Aego Events components
+======================
+
+Argo Events has 3 obejcts
+	- event source
+	- sensor
+	- eventBus
+
+
+event source 
+------------
+This is the configurations we make according to the trigger sources (GitHub, GitLab, Webhook etc.). Often involve integration with external systems or services. In our example we connect argo events to our GitLab event source. When we make a chaneg to our repository argo events will detect these changes.
+
+When we create EventSource object (event-source.yaml) it will create 3 different objects in our namepsace:
+	- kubernetes event source pod
+	- kuberentes service (type: clusterIP) - 
+	- gitlab webhook
+
+The event source object will create webhook in the GitLab repo. Webhooks are custom http callbacks that we define. They are usually triggered by an event such as pushing code to repository or posting comment on an issue. When the event occures the source app makes an http request to the URL configured to the webhhok.
+
+The kubernetes service type clusterIP not reachable of outside the cluster. That is why we will create ingress service to access our event source service. 
+
+
+sensor
+------
+This objects listens for events from events sources. They are resposible for mapping events to specific workflow triggers. In our example the sensor will trigger our workflow after argo events detect a change in the repository.
+
+
+eventBus
+--------
+Acts as transport layer between argo events and sensors.
+
+
+
+
+
+
+
+
+
+1. Creating GitLab private repository and set projects
+======================================================
+
+Install local GitLab repository with Docker 
+-------------------------------------------
+
+Start Docker container with GitLab
+	terminal --> docker run -d --hostname gitlab.local --name gitlab -p 443:443 -p 80:80 -p 22:22 --restart always -v ~/gitlab/config:/etc/gitlab -v ~/gitlab/logs:/var/log/gitlab -v ~/gitlab/data:/var/opt/gitlab gitlab/gitlab-ce:latest
+
+
+Set new password
+	terminal --> docker exec -it gitlab gitlab-rake "gitlab:password:reset[root]"
+	
+	Wait for the console to ask for password
+		terminal --> example_passowrd
+		terminal --> confirm password
+
+	# result: Password successfully updated for user with username root.
+
+	
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 gitlab.local'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim /etc/hosts
+	- Add '127.0.0.1 gitlab.local'
+	- save changes and exit - escape, :wq!, enter
+
+Login to GitLab on http://gitlab.localhost/users/sign_in
+	Username: root
+	Password: your_password
+
+Create a blank project
+	- name: argo-config
+	- Project URL: http://gitlab.localhost/root/argo-config
+	- Create project
+
+Creaet another project for our app
+	- name: app
+	- Project URL: http://gitlab.localhost/root/app
+	- Create project
+
+
+
+Create Locally repositories and connect them with GitLab
+--------------------------------------------------------
+
+Create 'argo-demo' folder and clone the 2 folders from the repo:
+
+1. my-app
+---------
+1.1. Clone the empty repo we created
+	terminal --> git clone http://gitlab.local/root/my-app.git
+
+1.2. Set the files in the repo folder
+	Navigate to folder
+		terminal --> cd my-app
+
+	Set the files
+	|--my-app
+	   |-- Dockerfile
+	   |-- index.html
+
+1.3. Push the fils
+	terminal --> git add .
+	terimnal --> git commit -m 'init repo'
+	terminal --> git push
+	terminal --> Username: root
+	terminal --> Password: gitlab_password
+
+
+
+2. argo-config
+--------------
+2.1. Clone the empty repo we created
+	terminal --> git clone http://gitlab.local/root/argo-config.git
+
+2.2. Set the files in the repo folder
+	Navigate to folder
+		terminal --> cd argo-config
+
+	Set the files
+	|--argo-cd
+	|  |-- argo-app.yaml
+	|
+	|--argo-events
+	|  |-- event-source.yaml
+	|  |-- sensor.yaml
+	|
+	|--argo-rollouts
+	   |-- nginx-ingress.yaml
+	   |-- nginx-rollouts.yaml
+	   |-- webhook-ingress.yaml
+
+2.3. Push the fils
+	terminal --> git add .
+	terimnal --> git commit -m 'init repo'
+	terminal --> git push
+
+
+
+
+
+File description
+================
+
+1. argo-config - This is ArgoCD configuration repository
+
+
+ARGO CD
+-------
+
+In  this folder is the application manifest.
+
+argo-cd
+   |-- argo-app.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argo-demo-application                 # application name
+  namespace: argocd                           # application namespace - visualize with ArgoCD           
+spec:
+  destination:
+    namespace: argo-demo                      # destination namespace - deployed in the argo-demo namespace
+    server: https://kubernetes.default.svc    # destination server
+  project: default                            # project
+  source:
+    path: argo-rollouts                       # path to the rollout manifest
+    repoURL: http://172.17.0.1/root/argo-config.git         # config repostiory address
+    targetRevision: main                                    # target revision - can be branch, tag or commit
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated:                                   # sync options section
+      prune: true                                # prune resources - delete resources that are not in the manifest
+      selfHeal: true                             # self heal enabled - recreate deleted resources
+      # automated: {}                            # automated sync
+-------------------------------------------------
+
+
+
+
+ARGO EVENTS 
+-----------
+In this folder we have 2 files
+	- event-source.yaml
+	- sensor.yaml
+
+The name of the service that event source will create is based on - name of the service in the ingress below
+	<event-source-name>-<eventsource>-<svc>>   -->  ci-eventsource-svc
+	object name	     hardcoded   hardcoded
+
+
+TEST CLUSTER <--> GITLAB CONNECTION
+-----------------------------------
+
+Our cluster must be connected with our GitLab server. In this case we are running both via Docker containers
+
+Find our GitLab IP address
+	terminal --> docker network inspect bridge | Select-String "Gateway"
+
+	# result: 172.17.0.1
+
+Test connections between cluster and GitLab
+	Try to reach Kind cluster from GitLab container
+		terminal --> docker exec -it gitlab curl -v http://172.17.0.1:32073
+	Try to reach GitLab container from Kind cluster
+		terminal --> docker exec -it kind-control-plane curl -v http://172.17.0.1
+
+	# if successfull we will set this IPs for connection between gitlab and kind cluster
+
+
+GENERATE GITLAB ACCESS TOKEN
+----------------------------
+
+Create User Personal Token
+	- connect to GitLab container
+		terminal --> docker exec -it gitlab gitlab-rails console
+
+	- Find the admin user 
+		terminal --> user = User.find_by(username: 'root')
+
+
+	- create personal token
+		terminal --> 
+token = user.personal_access_tokens.create(
+  name: 'gitlab-full-access',
+  scopes: ['api', 'read_repository', 'write_repository'],
+  expires_at: 1.year.from_now
+)
+	
+	- Display the token - COPYAND SAVE THE TOKEN IMMEDIATELY!
+		terminal --> 
+puts "=" * 60
+puts "TOKEN: #{token.token}"
+puts "=" * 60
+
+	- Verify creation
+		terminal --> 
+if token.persisted?
+  puts "✅ Token created successfully!"
+  puts "Name: #{token.name}"
+  puts "Scopes: #{token.scopes}"
+else
+  puts "❌ Error: #{token.errors.full_messages}"
+end
+
+	- Exit
+		terminal --> exit	
+
+
+Create access token for argo-config project
+	- go tp my-app repo/ Settings/Access tokens/Add new token
+		- Token name: argo-config-token
+		- Expiration date: No Expiration Date
+		- Select a role: Maintainer
+			- check 'api', 'read_repository' and 'write_repository' option
+		- Create project access token
+
+Create access token for my-app project
+	- go tp my-app repo/ Settings/Access tokens/Add new token
+		- Token name: my-app-token
+		- Expiration date: No Expiration Date
+		- Select a role: Maintainer
+			- check 'api', 'read_repository' and 'write_repository' option
+		- Create project access token
+
+We can use different tokens for the different projects (my-app and argo-config) We can use one user access token - not a good practice.
+
+Since the user is the same we use one env var in both secrets.
+
+
+ALLOW LOCAL HOOKS
+-----------------
+Go to GitLab/Admin/Settings/Network/Outbound requests/
+	- check 'Allow requests to the local network from webhooks and integrations'
+	- check 'Allow requests to the local network from system hooks'
+	- in the Local IP addresses and domain names ... add
+		172.17.0.1
+		127.0.0.1
+		argo.events
+	- Save Changes
+
+
+
+CREATE ENV VARIABLES WITH GITLAB CREDENTIALS 
+--------------------------------------------
+Create local environment variables with GitLab Username and Tokens
+	terminal --> $GITLAB_USERNAME = "root"				# set your username
+	terminal --> $GITLAB_USER_TOKEN = "generated_user_token"	# set your user token
+	terminal --> $GITLAB_APP_TOKEN = "generated_app_token"		# set the app token
+	terminal --> $GITLAB_CONFIG_TOKEN = "generated_config_token"	# set the config token
+
+Test the creation of the environment cariables
+	terminal --> echo $GITLAB_USERNAME
+	terminal --> echo $GITLAB_USER_TOKEN
+	terminal --> echo $GITLAB_APP_TOKEN
+	terminal --> echo $GITLAB_CONFIG_TOKEN
+
+
+CREATE SECRETS FOR GITLAB CREDENTAILS
+-------------------------------------
+Create secret in 'argo-events' namespace to use GitLab credentials for creating the webhook in my-app project
+	terminal --> kubectl create secret generic app-repo-credentials --from-literal=username=$GITLAB_USERNAME --from-literal=token=$GITLAB_APP_TOKEN -n argo-events
+
+	# result: secret/app-repo-credentials created
+
+Create secret in 'argo-events' namespace to use GitLab credentials for managing used image in the roolout in argo-config project
+	terminal --> kubectl create secret generic config-repo-credentials --from-literal=username=$GITLAB_USERNAME --from-literal=token=$GITLAB_CONFIG_TOKEN -n argo-events
+
+	# result: secret/github-credentials created
+
+We use this secret in event source and in the sersor manifests.
+
+
+
+GIVE ARGOCD ACCESS TO GITLAB REPO
+---------------------------------
+
+Create secret for GitLab repository access
+	terminal --> kubectl create secret generic argocd-gitlab-repo --from-literal=username=root --from-literal=password=$GITLAB_USER_TOKEN --from-literal=url=http://172.17.0.1/root/argo-config.git -n argocd
+
+Label it so ArgoCD recognizes it as a repository credential
+	terminal --> kubectl label secret argocd-gitlab-repo argocd.argoproj.io/secret-type=repository -n argocd
+
+Check if the repository is added successfully in ArgoCD UI - https://argocd.localhost:32074/settings/repos
+
+
+
+GIVE ARGO WORKFLOWS ACCESS TO NYXUS
+-----------------------------------
+
+For this task we need to create Docker secret called 'docker-config-secret' in our Argo Workflows working 'argo-events' namespace. We have to mount our docker credentials to this sescret.
+
+We need to create docker-config.json file and set the Nexus credentials so the workflow can pull and push images.
+
+1. Encode the nexus creadentials with shell
+	terminal --> $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("admin:admin123"))
+$auth
+	result: YWRtaW46YWRtaW4xMjM=
+
+2. Create docker-config.json
+-----------------------------------------
+{
+  "auths": {
+    "host.docker.internal:8085": {
+      "auth": "YWRtaW46YWRtaW4xMjM="
+    }
+  }
+}
+-----------------------------------------
+
+From the folder location create Docker secret
+	terminal --> kubectl create secret generic docker-config-secret --from-file=config.json=./docker-config.json -n argo-events
+
+	# result: secret/docker-config-secret created
+
+
+
+
+argo-events
+   |-- event-source.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource				# event source obejct
+metadata:
+  name: ci
+  namespace: argo-events
+spec:
+  service:
+    ports:
+      - port: 12000
+        targetPort: 12000
+  gitlab:                      # event source type
+    argo-demo:                 # event name - we can hevae multiple events - only one in this example
+      projects:
+        - "1"                  # project ID in the GitLba repo - gitlab/my-app/settings/general
+      webhook:                           # webhook section
+        endpoint: /push                  # endpoint
+        port: "12000"                    # port
+        url: http://host.docker.internal:32073     # custom url that must be reachable from iside our gitlab server !!!
+        # url: http://172.17.0.1:32073 if GitLab is running outside Docker - match the GitLab IP address
+        # port 32073 is the default Kind cluster HTTP port 
+      events:
+        - PushEvents              # when we nmake a push event to gitlab it will be detected
+      accessToken:
+        key: token                      # References the 'token' key
+        name: app-repo-credentials          # References the secret gitlab-credentials
+      enableSSLVerification: false          # disable SSL verification
+      gitlabBaseURL: http://172.17.0.1      # our local gitlab url found via 
+      deleteHookOnFinish: true              # the webhook will be deleted when this event source is deleted
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-events-ingress
+  namespace: argo-events
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /push
+        pathType: Exact                 # Used to match the path exactly for Docker internal network
+        backend:
+          service:
+            name: ci-eventsource-svc
+            port:
+              number: 12000
+
+# Use if the ingress is connecting out of Docker network
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress                                  # ingress
+# metadata:
+#   name: argo-demo-ingress
+#   namespace: argo-events
+# spec:
+#   ingressClassName: nginx
+#   rules:
+#   - host: argo.events                         # host name of the ingress 
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: ci-eventsource-svc          # the backend service name created by the event source
+#             port:
+#               number: 12000
+-------------------------------------------------
+
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 argo.events'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim /etc/hosts
+	- Add '127.0.0.1 argo.events'
+	- save changes and exit - escape, :wq!, enter
+
+We can test our the webhook endpoint on http://argo.events:32073
+
+
+
+
+argo-events
+   |-- sensor.yaml
+-------------------------------------------------
+# Create a service account with RBAC settings to allow the sensor to trigger workflows, and allow workflows to function.
+# kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/sensor-rbac.yaml
+# kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/workflow-rbac.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: ci
+  namespace: argo-events
+spec:
+  template:
+    serviceAccountName: operate-workflow-sa
+  dependencies:
+    - name: ci
+      eventSourceName: ci
+      eventName: argo-demo
+  triggers:
+    - template:
+        name: ci
+        argoWorkflow:
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                generateName: argo-demo-
+              spec:
+                arguments:
+                  parameters:
+                    - name: app-repo-url
+                      value: http://172.17.0.1/root/my-app.git
+                    - name: argo-config-repo-url
+                      value: http://172.17.0.1/root/argo-config.git
+                    - name: app-clone-dest
+                      value: /tmp/app
+                    - name: argo-config-clone-dest
+                      value: /tmp/argo-config
+                    - name: argo-config-branch
+                      value: main
+                    - name: nexus-registry
+                      value: host.docker.internal:8085
+                artifactRepositoryRef:
+                  configMap: artifact-repository                 # artifact repository configmap - MinIO
+                entrypoint: ci
+                templates:
+                - name: ci
+                  dag:
+                    tasks:
+                    - name: clone-repo-task                     # clone repo task
+                      template: clone-repo                      # clone repo template
+                    - name: build-push-task                     # build and push task
+                      template: build-and-push                  # build and push template
+                      arguments:                                # push artifact to with the image tag
+                        artifacts:
+                          - name: app-repo                      # artifact name
+                            from: "{{tasks.clone-repo-task.outputs.artifacts.app-repo}}"     # artifact path
+                      dependencies: [clone-repo-task]           # dependency on clone repo task
+                    - name: update-manifest-task                # update manifest task
+                      template: update-manifest                 # update manifest template
+                      arguments:                                # use artifacts from build-push task
+                        artifacts:
+                          - name: argo-config-repo              # artifact name
+                            from: "{{tasks.clone-repo-task.outputs.artifacts.argo-config-repo}}"     # artifact path
+                      dependencies: [clone-repo-task, build-push-task]   # dependency on clone repo task and build-push task
+                - name: clone-repo                          # clone repo template
+                  outputs:                                  # output artifacts
+                    artifacts:
+                    - name: app-repo                        # artifact name
+                      path: "{{workflow.parameters.app-clone-dest}}"              # artifact path
+                    - name: argo-config-repo                                      # artifact name
+                      path: "{{workflow.parameters.argo-config-clone-dest}}"      # artifact path
+                  script:
+                    image: alpine/git
+                    command: [sh]
+                    env:
+                      - name: APP_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: app-repo-credentials
+                            key: token
+                      - name: CONFIG_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: config-repo-credentials
+                            key: token
+                    source: |
+                      git clone http://root:${APP_TOKEN}@172.17.0.1/root/my-app.git {{workflow.parameters.app-clone-dest}}
+                      git clone http://root:${CONFIG_TOKEN}@172.17.0.1/root/argo-config.git {{workflow.parameters.argo-config-clone-dest}}
+                - name: build-and-push                      # build and push template
+                  inputs:                                   # input artifacts
+                    artifacts:
+                    - name: app-repo                                   # input artifact name
+                      path: "{{workflow.parameters.app-clone-dest}}"   # input artifact path
+                  volumes:
+                    - name: docker-config-secret            # use volume to read docker secret 
+                      secret:
+                        secretName: docker-config-secret    # use docker config secret to access private image registry
+                  container:
+                    readinessProbe:
+                      exec:
+                        command: [ sh, -c, "buildctl debug workers" ]
+                    image: moby/buildkit:v0.9.3-rootless
+                    volumeMounts:
+                      - name: docker-config-secret
+                        mountPath: /.docker
+                    workingDir: "{{workflow.parameters.app-clone-dest}}"
+                    env:
+                      - name: BUILDKITD_FLAGS
+                        value: --oci-worker-no-process-sandbox
+                      - name: DOCKER_CONFIG
+                        value: /.docker
+                    command:
+                      - buildctl-daemonless.sh
+                    args:
+                      - build
+                      - --frontend
+                      - dockerfile.v0
+                      - --local
+                      - context=.
+                      - --local
+                      - dockerfile=.
+                      - --output
+                      - type=image,name={{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}},push=true,registry.insecure=true
+                    securityContext:
+                      privileged: true
+                - name: update-manifest
+                  inputs:
+                    artifacts:
+                      - name: argo-config-repo
+                        path: "{{workflow.parameters.argo-config-clone-dest}}"
+                  script:
+                    image: alpine/git
+                    workingDir: "{{workflow.parameters.argo-config-clone-dest}}/argo-rollouts"
+                    command: [sh]
+                    env:                                    # read credentials from secret
+                      - name: GITLAB_USERNAME
+                        valueFrom:
+                          secretKeyRef:
+                            name: config-repo-credentials
+                            key: username
+                      - name: GITLAB_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: config-repo-credentials
+                            key: token
+                    source: |
+                      sed -i 's|image: host.docker.internal:8085/argo-demo/nginx:.*|image: {{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}}|' nginx-rollouts.yaml      
+                      git config user.name "$GITLAB_USERNAME"
+                      git config user.email "your-email@example.com"
+                      git add .
+                      git commit -m "image.tag has been changed to {{workflow.uid}}"
+
+                      git remote set-url origin http://${GITLAB_USERNAME}:${GITLAB_TOKEN}@172.17.0.1/root/argo-config.git
+                      git push origin {{workflow.parameters.argo-config-branch}}
+-------------------------------------------------
+
+
+
+
+
+
+ROLLOUT
+-------
+
+Every resource in this folder will be automatically created by ArgoCD when we deploy aour application !!!
+
+argo-rollouts
+   |-- nginx-rollouts.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: nginx-rollouts
+spec:
+  replicas: 5
+  strategy:
+    canary:
+      steps:
+      - setWeight: 20                   # first step is 20% of the traffic - 1 of 5 pods
+      - pause: {}                       # manual promotion required
+      - setWeight: 40                   # second step is 40% of the traffic - 2 of 5 pods
+      - pause: {duration: 10s}          # auto promotion afer 10 seconds
+      - setWeight: 60                   # third step is 60% of the traffic - 3 of 5 pods
+      - pause: {duration: 20s}          # auto promotion afer 20 seconds
+      - setWeight: 80                   # fourth step is 80% of the traffic - 4 of 5 pods
+      - pause: {duration: 1m}           # auto promotion afer 1 minute
+  selector:
+    matchLabels:
+      app: nginx-rollouts
+  template:
+    metadata:
+      labels:
+        app: nginx-rollouts
+    spec:
+      containers:
+      - name: nginx-rollouts
+        image: host.docker.internal:8085/argo-demo/nginx:alpine         # used image from Nexus repository
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  ports:
+  - port: 8080
+    targetPort: 80
+  selector:
+    app: nginx-rollouts
+-------------------------------------------------
+
+
+argo-rollouts
+   |-- nginx-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nginx-ingress
+  namespace: argo-demo                    # Note: argo-demo namespace, not argo-events
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: argo.demo                       # Access via http://argo.demo
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-service
+            port:
+              number: 8080
+-------------------------------------------------
+
+This is the ingress that expose the application.
+After the rollout is created the app should be accessabel on http://argo.demo:32073/
+
+
+
+
+argo-rollouts
+   |-- webhook-ingress.yaml
+-------------------------------------------------
+# This ingress is matching the Docker internal network with exact path
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-events-ingress
+  namespace: argo-events
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /push
+        pathType: Exact
+        backend:
+          service:
+            name: ci-eventsource-svc
+            port:
+              number: 12000
+-------------------------------------------------
+
+This ingress expose the webhook triggered from the push event in the GitLab repository and new workflow starts.
+This ingress is not used if the GitLab server is not running on the same Docker network.
+
+
+
+
+2. my-app - This is the app repository
+
+my-app
+  |-- Dockerfile
+  |-- index.html
+
+
+Dockerfile
+-------------------------------------------------
+FROM nginx:alpine
+COPY index.html /usr/share/nginx/html/
+-------------------------------------------------
+
+index.html
+-------------------------------------------------
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to My Website</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        .container {
+            text-align: center;
+            color: #333;
+        }
+
+        h1 {
+            font-size: 3em;
+            margin-bottom: 0.5em;
+            color: #3498db;
+        }
+
+        p {
+            font-size: 1.5em;
+            margin-top: 0;
+            color: #777;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Welcome to My Website, Version 1.0</h1>
+    </div>
+</body>
+</html>
+-------------------------------------------------
+
+
+
+
+
+DEPLOY THE SCENARIO
+===================
+
+
+DEPLOY THE APPLICATION 
+----------------------
+
+Deploy application in 'argocd' namespace (ArgoCD must visualize it)
+	terminal --> k apply -f argo-app.yaml -n argocd
+
+	# result: application.argoproj.io/argo-demo-application created
+
+We can access ArgoCD - https://argocd.localhost:32074/
+We can Access Argo Rollouts - http://rollouts.localhost:32073/rollouts/			# set argo-demo namespace
+We can access Argo Workflows - https://argo-workflows.localhost:32074/workflows/	# set 'argo-events' namespace
+We can access MinIO - http://minio.localhost:32073/browser
+We can access Nexus - http://localhost:8081/#browse/browse
+We can access GitLab - http://gitlab.localhost/
+
+After the application is deployed we can access it on http://argo.demo:32073/
+
+
+We can see the running pods in argo-events namespace
+	terminal --> k get pods -n argo-events
+
+	# result:
+	NAME                                  READY   STATUS    RESTARTS   AGE
+	controller-manager-59884fd695-5w557   1/1     Running   0          8h
+	eventbus-default-stan-0               2/2     Running   0          31m
+	eventbus-default-stan-1               2/2     Running   0          31m
+	eventbus-default-stan-2               2/2     Running   0          31m
+	events-webhook-588ccdfcb5-pl5kr       1/1     Running   0          8h
+
+
+List the serrvices in argo-events namespace
+	terminal --> k get svc -n argo-events
+
+	# result:
+	NAME                        TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                      AGE
+	eventbus-default-stan-svc   ClusterIP   None            <none>        4222/TCP,6222/TCP,8222/TCP   32m
+	events-webhook              ClusterIP   10.96.146.191   <none>        443/TCP                      8h
+
+
+
+DEPLOY EVENT SOURCE
+-------------------
+
+Deploy the event source manifest
+	terminal --> k apply -f event-source.yaml
+
+	# result:
+	eventsource.argoproj.io/ci created
+	ingress.networking.k8s.io/argo-demo-ingress created
+
+
+Deploy sensor in argo-events namespace
+	terminal --> k apply -f sensor.yaml -n argo-events
+
+	# result: sensor.argoproj.io/ci created
+
+
+
+List pods in argo-events namespace again
+	terminal --> k get pods -n argo-events
+
+	# result:
+	NAME                                    READY   STATUS    RESTARTS   AGE
+	ci-eventsource-p7bcl-7bd77fc7bb-8hcc2   1/1     Running   0          38s	# this pod is event source
+	controller-manager-59884fd695-5w557     1/1     Running   0          8h
+	eventbus-default-stan-0                 2/2     Running   0          35m
+	eventbus-default-stan-1                 2/2     Running   0          35m
+	eventbus-default-stan-2                 2/2     Running   0          35m
+	events-webhook-588ccdfcb5-pl5kr         1/1     Running   0          8h
+
+
+List the serrvices in argo-events namespace again
+	terminal --> k get svc -n argo-events
+
+	# result:
+	NAME                        TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                      AGE
+	ci-eventsource-svc          ClusterIP   10.96.206.159   <none>        12000/TCP                    2m9s	 # created svc
+	eventbus-default-stan-svc   ClusterIP   None            <none>        4222/TCP,6222/TCP,8222/TCP   32m
+	events-webhook              ClusterIP   10.96.146.191   <none>        443/TCP                      8h
+
+
+Check the webhook in gitlab repo - http://gitlab.localhost/root/my-app/-/hooks
+	- edit the webhook and set Trigger: Push events: All branches
+
+
+
+MAKE A CHANGE
+-------------
+
+When we create and push change to our app
+
+index.html
+-------------------------------------------------
+    <div class="container">
+        <h1>Welcome to My Website, Version 2.0</h1>
+    </div>
+-------------------------------------------------
+# from '1.0' to '2.0' - changed subversion
+
+Commit changes
+	terminal --> git add .
+	terminal --> git commit -m "version 2"
+ 	terminal --> git push
+
+
+The change in the repostiory will trigger the webhook and new workflow will start.
+
+After the workflow finishes the used image will be changed in the rollout.
+The application will autoamtic sync after 3 minutes.
+The application will start update (canary deployment will start).
+
+We can fooolow the rollout and promote the first step on http://rollouts.localhost:32073/rollouts/ or with Argo UI in the argo-demo namepsace.
+	terminal --> kargo promote nginx-rollouts -n argo-demo
+
+	# result: rollout 'nginx-rollouts' promoted
+
+After the rollout is finished and the application is running with the new version we can test it on http://argo.demo:32073/
+We should see message 'Welcome to My Website, Version 2.0'
+
+
+If we delete the app and we redeploy it we need to recreate the webhook also because of the flag 'deleteHookOnFinish: true' in the event-source.yaml manifest.
+	- Find ci deployment
+		terminal --> k get deploy -n argo-events
+
+		# result:
+		NAME                   READY   UP-TO-DATE   AVAILABLE   AGE
+		ci-eventsource-p7bcl   1/1     1            1           21h	# target deployment
+		ci-sensor-24b44        1/1     1            1           8h
+		controller-manager     1/1     1            1           30h
+		events-webhook         1/1     1            1           30h
+
+	- Restart the deployment	
+		terminal --> kubectl rollout restart deploy/ci-eventsource-p7bcl -n argo-events
+
+		# result: deployment.apps/ci-eventsource-p7bcl restarted
+
+	Now the webhook is recreated and we can trigger workflows again with push events.
+		
+
+
+
+
+
+
+
+
+
+
+
+
