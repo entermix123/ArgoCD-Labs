@@ -1,0 +1,605 @@
+
+05 - Argocd private repos & Defining Argocd private repos using manifests and terraform
+
+Video Link - https://www.youtube.com/watch?v=SsewuwHuA08&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=5
+
+Video Agenda:
+
+00:00 Argocd Private Repositories Overview
+02:35 HTTPS Username And Password Credential
+07:56 SSH Private Key Credential
+10:15 Defining Private Repo Using Cli And Ui
+12:00 Deploying An Application Using HTTPS Credentials
+14:00 Deploying An Application Using SSH Private Key Credential
+15:34 Credential Templates
+20:55 Defining Private Repo Using Terraform
+
+
+Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+Create a private repository in GitHub for testing and add folder 'ArgoCD Labs\argocd-application\helm-charts\' from ArgoCD Labs repo - https://github.com/entermix123/ArgoCD-Labs/tree/main. This is a simple nginx application that we will use as example.
+
+
+Argocd Private Repositories Overview
+====================================
+
+We have 2 different ways to authenticate to GitHub private repositories
+	- HTTPS - username and password or token
+	- SSH - add public SSH key to our GitHub account and use private SSH key to authenticate to our GitHub repository
+
+ArgoCD uses Kubernetes secret objects to store our credentials. For example we can store our username and password, token or private key into Kubernetes secret object and use that object to authenticate to this repositories.
+
+
+In '05-argocd-private-repositories\private-repos-manifests-examples' we will create the necessary files
+
+
+HTTPS Username And Password Credentials
+=======================================
+
+Create Kubernetes secret object to store our credentials to authenticate to our GitHub private repository using HTTPS way
+
+First we must create GitHub token fot access our private repos:
+	- Go to GitHub Account/Settings/Developers settings/Personal access tokens/Token (Fine Grinded)/Generate new token
+		- Token name: set name
+		- Expiration: 30 days or whatever isneede
+		- Repository access: All repositories (for secrets template) or Only selected repository (for single private repo)
+		- Permissions: 
+			- Contents (read-only)
+			- Metadata (read-only) Required
+		- Generate token
+
+
+Create secret obejct https-private-repo-secret.yaml
+
+https-private-repo-secret.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: https-private-repo-secret				# Kubernetes secret object name
+  namespace: argocd
+  labels:
+     argocd.argoproj.io/secret-type: repository			# crutial label
+stringData:
+  type: git
+  url: https://github.com/mohammadll/argo-tutorial.git		# private repo HTTPS url
+  username: argocd-privare-repo					# token name
+  password: CHANGE_ME_WITH_TOKEN				# token value
+-----------------------------------------------
+
+
+Create the secret object in Kubernetes
+	terminal --> k apply -f https-private-repo-secret.yaml
+
+	# result: secret/https-private-repo-secret created
+
+Confirm secret creation
+	terminal --> k get secret
+
+	# result:
+	NAME                           TYPE                 DATA   AGE
+	argocd-initial-admin-secret    Opaque               1      7d23h
+	argocd-notifications-secret    Opaque               0      7d23h
+	argocd-redis                   Opaque               1      7d23h
+	argocd-secret                  Opaque               5      7d23h
+	https-private-repo-secret      Opaque               4      42s		# our new secret object
+	sh.helm.release.v1.argocd.v1   helm.sh/release.v1   1      7d23h
+
+
+To check the status of the repository connection we go ArgoCD UI/Settings/Repositories. The repository we set the token for should be lsited and the connection status should be successful.
+Example: https://github.com/...
+
+
+
+
+SSH Private Key Credentials
+===========================
+
+Generate SHH key on the local PC and set it in GitHub
+	terminal --> ssh-keygen -t ed25519 -C "your.email@example.com"
+	terminal --> enter							# accept default key location
+
+	# This will create 2 files: Private Key - id_ed25519 and id_ed25519.pub. 
+	# The first file is our private key and it must be in secret.
+	# The second file is our public key that we need to add to our GitHub account/SSH keys
+	# Open the id_ed25519.pub file with text editor, copy the line and add it in GitHub SSH keys
+
+	Add SSH public key to GitHub:
+		- Go to GitHub/Account/Settings/SSH and GPG keys/New SSH Key
+			- Title: argocd_private_repo_ssh_key
+			- Key: paste the key in this field
+		- Add key
+
+	Open id_ed25519 (private key) and copy the key. We use it in the secret we create as Kubernetes secret object.
+
+
+Copy our private repository SSH url.
+
+Create SSH secert file called ssh-private-repo-secret.yaml
+
+ssh-private-repo-secret.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ssh-private-repo-secret					# secret object name
+  namespace: argocd						# target namespace
+  labels:
+     argocd.argoproj.io/secret-type: repository			# crutial label
+stringData:
+  type: git
+  url: git@github.com:mohammadll/argo-tutorial.git		# private repo SSH url
+  sshPrivateKey: |
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    .........................................			# add the private SSH key here
+    -----END OPENSSH PRIVATE KEY-----
+-----------------------------------------------
+
+
+Create the secret object
+	terminal --> k apply -f ssh-private-repo-secret.yaml
+
+	# result: secret/ssh-private-repo-secret created
+
+Confirm secret creation
+	terminal --> k get secret
+
+	# result:
+	NAME                           TYPE                 DATA   AGE
+	argocd-initial-admin-secret    Opaque               1      7d23h
+	argocd-notifications-secret    Opaque               0      7d23h
+	argocd-redis                   Opaque               1      7d23h
+	argocd-secret                  Opaque               5      7d23h
+	https-private-repo-secret      Opaque               4      37m
+	ssh-private-repo-secret        Opaque               3      59s		# this is our new ssh secret
+
+To check the status of the repository connection we go ArgoCD UI/Settings/Repositories. The repository we set the SSH key for should be lsited and the connection status should be successful.
+Example: git@github.com:...
+
+
+
+
+Defining Private Repo Using Cli And Ui
+======================================
+
+Connect to private repository via ArgoCD CLI:
+---------------------------------------------
+Show help commands for connecting to private repository
+	terminal --> argocd repo add -h
+
+	# We can use the specific method we like from the examples shown
+
+Examples:
+  # Add a Git repository via SSH using a private key for authentication, ignoring the server's host key:
+  argocd repo add git@git.example.com:repos/repo --insecure-ignore-host-key --ssh-private-key-path ~/id_rsa
+
+  # Add a Git repository via SSH on a non-default port - need to use ssh:// style URLs here
+  argocd repo add ssh://git@git.example.com:2222/repos/repo --ssh-private-key-path ~/id_rsa
+
+
+Connect to private repo using ArgoCD UI:
+----------------------------------------
+Follow the process as below:
+	- Connect Repo
+		- Choose your connection method
+			- VIA SSH, VIA HTTP/HTTPS, VIA GITHUB APP, VIA GOOGLE CLOUD 	# (SSH Selected)
+		- Name (mandatory for Helm): repo name
+		- Project: select the project
+		- Repository URL: set the repo SSH URL
+		- SSH private key data: seth the private key 
+
+
+
+
+
+Deploying An Application Using HTTPS Credentials:
+=================================================
+
+Create a application manifest file called app-private-repo-https.yaml
+
+app-private-repo-https.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: app-private-repo-https
+  namespace: argocd  				  # application source namespace
+spec:
+  destination:
+    namespace: default                		  # where application will be deployed
+    server: https://kubernetes.default.svc 	  # default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				  # use default project for this lab
+  source:
+    path: helm-charts/nginx			                          # the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/argocd-labs-private-repo.git  # private repo url with https credentials
+    targetRevision: main				
+-----------------------------------------------
+
+Create the application
+	terminal --> k apply -f app-private-repo-https.yaml
+
+	# result: application.argoproj.io/app-private-repo-https created
+
+Check the application in ArgoCD UI and syn it
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+The application should synchronize successfuly.
+
+
+
+
+
+Deploying An Application Using SSH Private Key Credential
+=========================================================
+
+
+Create application manifest file called app-private-repo-ssh.yaml
+
+app-private-repo-ssh.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: app-private-repo-ssh
+  namespace: argocd  
+spec:
+  destination:
+    namespace: default                		  # where application will be deployed
+    server: https://kubernetes.default.svc 	  # default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				  # use default project for this lab
+  source:
+    path: helm-charts/nginx			  			# the path in the repo to the apllication manifests
+    repoURL: git@github.com:entermix123/argocd-labs-private-repo.git    # private repo url with ssh credentials
+    targetRevision: main		
+-----------------------------------------------
+
+
+Create the application
+	terminal --> k apply -f app-private-repo-ssh.yaml
+
+	# result: application.argoproj.io/app-private-repo-ssh created
+
+Check the application in ArgoCD UI and syn it
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+The application should synchronize successfuly.
+
+
+
+
+
+Credential Templates
+====================
+
+Define creadential template and used for multiple private repositories.
+
+To use one HTTPS token for multiple repositories, we need to grand it access to all repositories we will use the template for. !!! 
+
+For this examples we disconnect all connections to our private repostiories - https and ssh
+	- Go to ArgoCD UI/Settings/Repositories
+		- Disconnect/Ok			# for the 2 entities we have created
+
+Create https secret template file called https-private-repos-secret-template.yaml
+
+Main differences:
+	- changed label
+	- set repo full url to just the prefix
+
+https-private-repos-secret-template.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: https-private-repo-secret-template				# template name
+  namespace: argocd
+  labels:
+     argocd.argoproj.io/secret-type: repo-creds				# changed label
+stringData:
+  type: git
+  url: https://github.com/entermix123					# github account prefix
+  username: argocd_private_repo						# github token name
+  password: token							# token
+-----------------------------------------------
+
+
+Create the remplate
+	terminal --> k apply -f https-private-repos-secret-template.yaml
+
+	# result: secret/https-private-repo-secret-template created
+
+In ArgoCD UI/Settings/Repositories we can see that we have new CREDENTIALS TEMPLATE URL
+	- https://github.com/entermix123
+
+
+
+Now we can create applications using repositories with the created prefix url:
+------------------------------------------------------------------------------
+
+Create new application manifest file called app-private-repo-https-secret-template.yaml
+
+app-private-repo-https-secret-template.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: app-private-repo-https-secret-template
+  namespace: argocd  				  # application source namespace
+spec:
+  destination:
+    namespace: default                		  # where application will be deployed
+    server: https://kubernetes.default.svc 	  # default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				  # use default project for this lab
+  source:
+    path: helm-charts/nginx			                          # the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/argocd-labs-private-repo.git  # private repo url with correct prefix
+    targetRevision: main
+-----------------------------------------------
+
+
+Create the app-private-repo-https-secret-template.yaml application 
+	terminal --> k apply -f app-private-repo-https-secret-template.yaml
+
+	# result: application.argoproj.io/app-private-repo-https-secret-template created
+
+Check the application in ArgoCD UI and syn it
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+The application should synchronize successfuly.
+
+
+
+
+Same approach we can apply for SSH secret template:
+---------------------------------------------------
+
+Create SSH secert file called ssh-private-repos-secret-template.yaml
+
+ssh-private-repos-secret-template.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ssh-private-repo-secret-template			# secret object name
+  namespace: argocd						# target namespace
+  labels:
+     argocd.argoproj.io/secret-type: repo-creds			# change label
+stringData:
+  type: git
+  url: git@github.com:mohammadll				# private repo prefix SSH url
+  sshPrivateKey: |
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    .........................................			# add the private SSH key here
+    -----END OPENSSH PRIVATE KEY-----
+-----------------------------------------------
+
+Create the ssh secret template
+	terinal --> k apply -f ssh-private-repos-secret-template.yaml
+	
+	# result: secret/ssh-private-repo-secret-template created
+
+In ArgoCD UI/Settings/Repositories we can see that we have new CREDENTIALS TEMPLATE URL
+	- git@github.com:entermix123
+
+
+Create application manifest file called app-private-repo-ssh-secret-template.yaml
+
+app-private-repo-ssh-secret-template.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: app-private-repo-ssh-secret-template
+  namespace: argocd  
+spec:
+  destination:
+    namespace: default                		  # where application will be deployed
+    server: https://kubernetes.default.svc 	  # default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: default				  # use default project for this lab
+  source:
+    path: helm-charts/nginx			  			# the path in the repo to the apllication manifests
+    repoURL: git@github.com:entermix123/argocd-labs-private-repo.git    # private repo url with ssh credentials
+    targetRevision: main		
+-----------------------------------------------
+
+
+Create the application
+	terminal --> k apply -f app-private-repo-ssh-secret-template.yaml
+
+	# result: application.argoproj.io/app-private-repo-ssh-secret-template created
+
+Check the application in ArgoCD UI and syn it
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+The application should synchronize successfuly.
+
+
+
+
+
+
+
+Defining Private Repo Using Terraform:
+======================================
+
+We will use argocd_repository resource of the terraform argocd provider.
+
+Provider we will use for argocd - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs
+
+Resource for argocd_repository - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs/resources/repository
+
+
+We create 4 terraform files as follow
+	- providers.tf
+	- main.tf
+	- variables.tf
+	- terraform.tfvars
+
+
+providers.tf
+-----------------------------------------------
+terraform {
+  required_providers {
+    argocd = {
+      source  = "argoproj-labs/argocd"
+      version = "7.12.4"
+    }
+  }
+}
+
+provider "argocd" {
+  server_addr = var.server_addr
+  username    = var.username
+  password    = var.password
+  insecure    = var.insecure
+}
+-----------------------------------------------
+
+
+Using HTTPS communication we use the configuration below:
+
+main.tf
+-----------------------------------------------
+# Private Git repository
+resource "argocd_repository" "private" {
+  repo     = var.repo_url
+  username = var.repo_username
+  password = var.repo_password
+  # ssh_private_key = var.ssh_private_key	# If SSH communication, remove username and password fields
+}
+-----------------------------------------------
+
+If we want to use SSH communication we must set filed ssh_private_key = var.ssh_private_key instead of password.
+- https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs/resources/repository#example-usage
+
+
+
+
+variables.tf
+-----------------------------------------------
+variable "server_addr" {
+  type        = string
+  description = "The server address"
+}
+
+variable "username" {
+  type        = string
+  description = "The Username"
+}
+
+variable "password" {
+  type        = string
+  description = "The Password"
+}
+
+variable "insecure" {
+  type        = bool
+  description = "The Connection Insecure flag"
+}
+
+variable "repo_password" {
+  type        = string
+  description = "The Password or the token of my github account"
+}
+
+variable "repo_username" {
+  type        = string
+  description = "The username or the token name"
+}
+
+variable "repo_url" {
+  type        = string
+  description = "The Private Repository Url"
+}
+-----------------------------------------------
+
+
+terraform.tfvars
+-----------------------------------------------
+server_addr   = "localhost:32074"					# Argocd host and port for connection
+username      = "admin"							# Argocd username
+password      = "password"						# ArgoCD admin password
+insecure      = true
+repo_username = "argocd-privare-repo"					# github https token name
+repo_password = "CHANGE-ME-WITH-TOKEN"					# https token value
+repo_url      = "https://github.com/mohammadll/argo-tutorial.git"	# https repo url
+
+# repo_username = "git"							# in case of SSH
+# ssh_private_key = "ssh-private-key"					# ssh private key value & delete repo_password field
+-----------------------------------------------
+Example variable usage:
+- https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs/resources/repository#example-usage
+
+
+Format terraform files
+	terminal --> terraform fmt
+
+Download and install terraform providers configurations
+	terminal --> terraform init
+
+	# result: Terraform has been successfully initialized!
+
+Validate terraform confugration
+	terminal --> terraform validate	
+
+	# result: Success! The configuration is valid.
+
+Plan terraform resources
+	terminal --> terraform plan	
+
+	# result: Plan: 1 to add, 0 to change, 0 to destroy.
+
+	We can go over and see exactly what resources will be created on our system.
+
+Apply terraform configuration
+	terminal --> terraform apply
+	terminal --> yes
+
+	# result:
+	argocd_repository.private: Creating...
+	argocd_repository.private: Still creating... [00m10s elapsed]
+	argocd_repository.private: Creation complete after 10s [id=https://github.com/entermix123/argocd-labs-private-repo.git]
+
+	Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+
+
+We can see in ArgoCD/Setting/Repositories that we have added private repository
+	- https://github.com/entermix123/argocd-labs-private-repo.git
+
+
+Now we can deploy application from our private repository.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
