@@ -1,0 +1,1088 @@
+06 - Argocd sync policies and sync options
+
+Video Link - https://www.youtube.com/watch?v=XU08NQH11-Q&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=6
+
+Video Agenda:
+
+00:00:00 Automated Sync Policy
+00:10:15 Automatic Pruning
+00:21:10 Automatic Self-Healing
+00:30:05 Sync Options Overview
+00:30:55 No Prune Resources
+00:39:10 Disable Kubectl Validation
+00:39:55 Selective Sync
+00:45:00 Replace Resource Instead Of Applying Changes
+00:48:05 Fail On Shared Resource
+00:56:20 Create Namespace
+1:01:41 Defining argocd application with Sync-policies-options using terraform
+
+Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+
+
+Automated Sync Policy
+=====================
+
+Benefit of automatic synchronization is that the CI/CD pipelines do not need direct access to ArgoCD API server to perform the deployment. Instead the pipeline makes a commit and push to the git repository with the changes to the manifests in the tracking git repo.
+
+In '06-argocd-sync-policies-options\sync-policies' we will create applications files for the different sync onption.
+
+
+Create application manifest with automated sync option called app-automated-sync.yaml
+
+app-automated-sync.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: automated-sync-application
+spec:
+  destination:
+    namespace: automated-sync
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    automated: {}						# this is the automated sync policy
+-----------------------------------------------
+
+Create destination namespace manually
+	terminal --> k create ns automated-sync			# result: namespace/automated-sync created
+
+Create the application
+	terminal --> k apply -f app-automated-sync.yaml		
+
+	# result: application.argoproj.io/automated-sync-application created
+
+We can see in ArgoCD UI that the new application is already synced.
+
+Change the "replicas: 1" to 2 in the repository "argocd-application\directoryOfmanifests\deployment.yml" the used application in this example and check that ArgoCD will automatically sync the changes.
+
+
+
+Automatic Pruning
+=================
+
+When we delete artifact (service for example) from the github repo, the service will not be deleted from the Kubernetes cluster, and in ArgoCD UI this service will be visible.
+
+Automatic prunning is used for removing artifacts from live state of the ArgoCD application. If automatic pruning is not set, we have to remove manually artifacts from the application by synchronizing it with cheched "PRUNE" checkbox.
+
+We can set automatic prunning options as follow:
+
+Create application manifest with automated prune option called app-automated-prune.yaml
+
+app-automated-prune.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prune-application					# changed name
+spec:
+  destination:
+    namespace: prune-sync					# changed namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    automated:							# this is the prune policy
+      prune: true						# this is automated prune parameter enabled
+-----------------------------------------------
+
+Create destination namespace manually
+	terminal --> k create ns prune-sync		# result: namespace/prune-sync created
+
+Create the application with automated prune option
+	terminal --> k apply -f app-automated-prune.yaml
+
+	# result: application.argoproj.io/prune-application created
+
+This application now is with automated sync and prune policy. It means that the application automatically synced and if we remove artifacts from the repository, the corresponding objects are automatically removed from the live state in the Kubernetes cluster.
+
+
+
+Automatic Self-Healing
+======================
+
+Selfhealing policy is used for automatically sync the live state with the desired state if changes are made manually.
+
+Example:
+
+Scale the deployment to 10 replicas manually with ArgoCD CLI
+	terminal --> k scale deploy/nginx --replicas=10 -n automated-sync
+
+	# result: deployment.apps/nginx scaled
+
+Confirm that the deployment is scaled
+	terminal --> k get deploy -n automated-sync
+
+	# result:
+	NAME    READY   UP-TO-DATE   AVAILABLE   AGE
+	nginx   10/10   10           10          45m		# we cansee that we have 10 pods running
+
+
+In ArgoCD UI we can see that the application "automated-sync-application" in automated-sync namespace from the sync policy example has 10 pods, is out of sync and is not synchronized automatically. We need to sync the application manually to remove the additional 9 pods we scaled.
+
+The automated sync option is working only for changes in the repository and not for other sources of desynchronization. For this purposes we use selfhealing policy.
+
+Enable selfhealing policy as follow:
+
+
+Create application manifest called app-selfheal-sync.yaml
+
+app-selfheal-sync.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: selfheal-application					# changed name
+spec:
+  destination:
+    namespace: selfheal-sync					# changed namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    automated:							# this is the automated policies section
+      selfHeal: true						# this is automated selfhealing policy enabled
+-----------------------------------------------
+
+
+Create namespace selfheal-sync manually
+	terminal --> k create ns selfheal-sync			# result: namespace/selfheal-sync created
+
+Create the application app-selfheal-sync.yaml
+	terminal --> k apply -f app-selfheal-sync.yaml
+
+	# result: application.argoproj.io/selfheal-application created
+
+The application should be running. Check in ArgoCD UI.
+
+Scale the deplyment of the new application manually
+	terminal --> k scale deploy/nginx --replicas=10 -n selfheal-sync
+
+	# result: deployment.apps/nginx scaled
+
+If ArgoCD UI is opened we can see that the pods scaled to 10 just for fes seconds and then the additional pods has been removed. This action is made by the selfhealing policy.
+
+Check if the deployment is scaled
+	terminal --> k get deploy -n selfheal-sync
+
+	# result:
+	NAME    READY   UP-TO-DATE   AVAILABLE   AGE
+	nginx   2/2     2            2           4m27s		# we have only 2 replicas as in the repository deployment	
+
+
+
+Sync Options Overview
+=====================
+
+We have several sync options which are used on two levels - application level and resource level
+
+resource level sync policies:
+-----------------------------
+	- delete.yaml
+	- disable-kubectl-validation.yaml
+	- no-prune.yaml
+	- prune-last.yaml
+	- replace.yaml
+
+
+delete.yaml
+-----------------------------------------------
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false
+-----------------------------------------------
+
+
+disable-kubectl-validation.yaml
+-----------------------------------------------
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Validate=false
+-----------------------------------------------
+
+
+no-prune.yaml
+-----------------------------------------------
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false
+-----------------------------------------------
+
+
+prune-last.yaml
+-----------------------------------------------
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: PruneLast=true
+-----------------------------------------------
+
+
+replace.yaml
+-----------------------------------------------
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Replace=true
+-----------------------------------------------
+
+
+
+
+
+application level sync policies:
+--------------------------------
+	- create-namespcae.yaml
+	- fail-on-shared-resources.yaml
+	- namespace-metadata.yaml
+	- prune-last.yaml
+	- replace.yaml
+	- selective-sync.yaml
+
+
+create-namespcae.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  namespace: argocd
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: some-namespace
+  syncPolicy:
+    syncOptions:
+    - CreateNamespace=true
+-----------------------------------------------
+
+
+fail-on-shared-resources.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+spec:
+  syncPolicy:
+    syncOptions:
+    - FailOnSharedResource=true
+-----------------------------------------------
+
+
+namespace-metadata.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  namespace: test
+spec:
+  syncPolicy:
+    managedNamespaceMetadata:
+      labels: # The labels to set on the application namespace
+        any: label
+        you: like
+      annotations: # The annotations to set on the application namespace
+        the: same
+        applies: for
+        annotations: on-the-namespace
+    syncOptions:
+    - CreateNamespace=true
+-----------------------------------------------
+
+
+prune-last.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+spec:
+  syncPolicy:
+    syncOptions:
+    - PruneLast=true
+-----------------------------------------------
+
+
+replace.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+spec:
+  syncPolicy:
+    syncOptions:
+    - Replace=true
+-----------------------------------------------
+
+
+selective-sync.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+spec:
+  syncPolicy:
+    syncOptions:
+    - ApplyOutOfSyncOnly=true
+-----------------------------------------------
+
+
+
+
+
+
+
+Resource level sync options:
+============================
+
+No Prune Resources
+------------------
+
+Examples:
+
+Example scenarion: We want to prevent ServiceAccount to being pruned.
+
+This is the annotation we need to add to the serviceaccount manifest file:
+
+delete.yaml
+-----------------------------------------------
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false
+-----------------------------------------------
+
+In the git repository "argocd-application\directoryOfmanifests\serviceaccount.yml" we add this annotation to the ServiceAccount artifact
+
+serviceaccount.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nginx
+  annotations:								# added
+    argocd.argoproj.io/sync-options: Prune=false			# added
+  labels:
+    helm.sh/chart: nginx-0.1.0
+    app.kubernetes.io/name: nginx
+    app.kubernetes.io/instance: nginx
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+-----------------------------------------------
+
+Now if we delete the manifest file of serviceaccount in the repository, the object in the Kubernetes cluster will NOT be removed.
+
+Create new application named app-automated-prune-sync-options.yaml
+
+app-automated-prune-sync-options.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prune-application-options-no-prune			# changed name
+spec:
+  destination:
+    namespace: prune-sync-options				# changed namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    automated:							# this is the prune policy
+      prune: true
+-----------------------------------------------
+
+Create namespcae manually
+	terminal --> k create ns prune-sync-options
+
+	# result: namespace/prune-sync-options created
+
+Create the application app-automated-prune-sync-options.yaml
+	terminal --> k create -f app-automated-prune-sync-options.yaml
+
+	# result: application.argoproj.io/prune-application-options-no-prune created
+
+Now we have two applications with autoprune option enabled
+
+We will now delete 2 artifacts from the repository - service.yaml and serviceaccount.yaml. In the service.yaml we dont have "prune" annotation and in the serviceaccount we have "prune" annotation added.
+
+service.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  annotations:
+        argocd.argoproj.io/sync-options: Replace=true		# we have replace but not prune option added
+  labels:
+    helm.sh/chart: nginx-0.1.0
+    app.kubernetes.io/name: nginx
+    app.kubernetes.io/instance: nginx
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: nginx
+    app.kubernetes.io/instance: nginx
+-----------------------------------------------
+
+
+serviceaccount.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nginx
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false		# we have prune annotation added
+  labels:
+    helm.sh/chart: nginx-0.1.0
+    app.kubernetes.io/name: nginx
+    app.kubernetes.io/instance: nginx
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+-----------------------------------------------
+
+
+Delete the 2 artifacts from the repository and check the ArgoCD UI for reactions. In the application 'prune-application-options-no-prune' we created we can refresh and see that the service is removed but the serviceaccount is still available with 'trash' icon on it. We can see details of the serviceaccount object (live manifest) in the ArgoCD UI and see that the annotation 'argocd.argoproj.io/sync-options: Prune=false' is available.
+
+Revert hte changes of the deletions
+	- pull the changes from github locally
+	- copy the commits ids for the deletions and pull the changes locally
+		terminal --> git pull
+	- revert them in locally
+		terminal --> git revert <commit1> <commit2>
+	- push the changes to github
+		terminal --> git commit "reverted deletion of service and serviceaccount manifests"
+		terminal --> git push
+
+Now the applications has service and serviceaccount artifacts and they are synced with the repository.
+
+
+
+
+Disable Kubectl Validation
+--------------------------
+
+disable-kubectl-validation.yaml
+-----------------------------------------------
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Validate=false
+-----------------------------------------------
+
+This annotation is used on resource level. This annotation is used to skip kubectl validation when:
+	- We deploy Custom Resource Definition (CRDs) that 
+		- Kuberentes doesn't know abut yet. 
+		- ArgoCD can't validate resources it doesen't have schemas for.
+	-  Beta/Alpha API Versions 
+		- Using experimental Kubernetes features
+		- API versions not fully recognized by the cluster
+	- Intentionally Invalid YAML (Templating) 
+		- Resources with template placeholders that will be filled later
+		- Helm charts with complex templating that looks invalid before rendering
+	- Cross-Cluster Resources
+		- Deploying resources for API versions not present in the ArgoCD cluster
+		- Multi-cluster setups where target cluster has different APIs
+	- Breaking Changes During Upgrades
+		- Temporarily bypassing validation during major Kubernetes upgrades
+		- When API versions are deprecated but you need time to migrate
+	- Custom Admission Controllers
+		- Your cluster has custom webhooks that modify resources
+		- Validation would fail but admission controller will fix it
+
+
+
+
+
+
+
+
+
+Application level sync options:
+===============================
+
+
+Selective Sync
+--------------
+
+We can use this option on application level only!!!
+
+If all objects are applied in every change ArgoCD is working unnecessarily and puts a lot of pressure on the API server. 
+This policy set ArgoCD to sync objects that are only out of sync and not all object. This options will set ArgoCD to sync only out of sync resources.
+
+
+selective-sync.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+spec:
+  syncPolicy:
+    syncOptions:
+    - ApplyOutOfSyncOnly=true
+-----------------------------------------------
+
+Example:
+
+Create new apllication called app-automated-selective-sync.yaml
+
+app-automated-selective-sync.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: automated-selective-sync-application			# changed name
+spec:
+  destination:
+    namespace: automated-selective-sync
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    syncOptions:						# added sync options section
+    - ApplyOutOfSyncOnly=true					# enabled parameter ApplyOutOfSyncOnly
+    automated: {}						# auto sync enabled
+-----------------------------------------------
+
+Create namespace manually
+	terminal --> k create ns automated-selective-sync
+
+	# result: namespace/automated-selective-sync created
+
+Create tje application app-automated-selective-sync.yaml
+	terminal --> k apply -f app-automated-selective-sync.yaml
+
+	# result: application.argoproj.io/automated-selective-sync-application created
+
+If we make a change to our deployment in the repository "argocd-application/directoryOfmanifests/deployment.yml" to replicas: 1 and look at the sync reaction in ArgoCD UI, when we click on "Sync OK" in the Last Sync section, we can see that only deployment object is being synced and not service and serviceaccount.
+
+
+
+
+
+Replace Resource Instead Of Applying Changes
+--------------------------------------------
+
+We can use this option on resource and application level !!!
+
+By default ArgoCD execute 'kubectl apply' command to apply manifests from git repository. In some cases "kubectl apply" is not suitable. For example resource as pack might be too big and won't fit into last applied configuration annotation that is added by "kubectl apply". In such cases we might use 'replace=true' option.
+
+On application level - ArgoCD will use 'kubectl replace' for all resources in the application.
+On resource level - ArgoCD will use 'kubectl replace' only for that specific resource.
+
+replace.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+spec:
+  syncPolicy:
+    syncOptions:
+    - Replace=true
+-----------------------------------------------
+
+
+For example we have this annotation setin service in our application 'argocd-application/directoryOfmanifests/service.yml'. It means we use replace option on resource level.
+
+We can see this difference in the live manifests files in ArgoCD UI. In service manifest we have "argocd.argoproj.io/sync-options: Replace=true", no 'kubectl.kubernetes.io/last-applied-configuration' section and in serviceaccount we have 'kubectl.kubernetes.io/last-applied-configuration' and don't have the annotation. 
+
+service live manifest
+-----------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Replace=true			# available
+    argocd.argoproj.io/tracking-id: >-
+-----------------------------------------------
+
+serviceaccount live manifest
+-----------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false			# not replace option
+    argocd.argoproj.io/tracking-id: >-
+      automated-selective-sync-application:/ServiceAccount:automated-selective-sync/nginx
+    kubectl.kubernetes.io/last-applied-configuration: >							# configuration
+      {"apiVersion":"v1","kind":"ServiceAccount","metadata":{"annotations":{"argocd.argoproj.io/sync-options":"Prune=false","argocd.argoproj.io/tracking-id":"automated-selective-sync-application:/ServiceAccount:automated-selective-sync/nginx"},"labels":{"app.kubernetes.io/instance":"nginx","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/name":"nginx","app.kubernetes.io/version":"1.16.0","helm.sh/chart":"nginx-0.1.0"},"name":"nginx","namespace":"automated-selective-sync"}}
+  creationTimestamp: '2025-12-20T11:36:43Z'
+-----------------------------------------------
+
+This means that the service.yaml resource is being replaced and not modified and serviceaccount.yaml is being configured and not replaced.
+
+
+
+
+
+Fail On Shared Resource
+-----------------------
+
+This option is used on application level only !!!
+
+ArgoCD will apply all resources regardless of if some of the resources are already applied in different application. 
+
+If 'FailOnSharedResource' is set ArgoCD will fail the sync whenever it finds a resource in the current application that is applied or already in the cluster by another application.
+
+fail-on-shared-resource.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+spec:
+  syncPolicy:
+    syncOptions:
+    - FailOnSharedResource=true
+-----------------------------------------------
+
+
+Example:
+
+Create application manifest called app-shared-1.yaml
+
+app-shared-1.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: automated-sync-shared-application-1				# change name
+spec:
+  destination:
+    namespace: automated-sync-share					# change namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    syncOptions:							# added sync option section
+    - FailOnSharedResource=true						# enabled FailOnSharedResource parameter 
+    automated: {}							# enable application automated sync
+-----------------------------------------------
+
+Create the namespace manually
+	terminal --> k create ns automated-sync-share
+
+	# result: namespace/automated-sync-share created
+
+
+Create the application app-shared-1.yaml
+	terminal --> k apply -f app-shared-1.yaml
+
+	# result: application.argoproj.io/automated-sync-shared-application created
+
+
+
+Create second application manifest called app-shared-2.yaml
+
+
+app-shared-2.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: automated-sync-shared-application-2				# change name
+spec:
+  destination:
+    namespace: automated-sync-share					# same namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    syncOptions:							# added sync option section
+    - FailOnSharedResource=true						# enabled FailOnSharedResource parameter 
+    automated: {}							# enable application automated sync
+-----------------------------------------------
+
+Create the application app-shared-2.yaml
+	terminal --> k apply -f app-shared-2.yaml
+
+	# result: application.argoproj.io/automated-sync-shared-application-2 created
+
+In ArgoCD UI and we can see that the first application app-shared-1.yaml is successfully created and synced. This application do not use resources used by another aplication in the cluster.
+
+The second application app-shared-2.yaml is created but fail to sync. This is because we use the same resources like the first application. We can open the warnings that appears in the second application details. 
+
+After some time we will receive an error connected with the usage of the resources. We can go to OutOfSync/Events and see that the reason is 'Sync operation to e4a352363ff5c8d22e456a88bcf196044a735c80 failed: Shared resource found: 1 Deployment/nginx is part of applications argocd/automated-sync-shared-application-2 and automated-sync-shared-application-1 (retried 5 times).'
+
+
+
+
+Create Namespace
+----------------
+
+Till now we use to create the namespaces for each new application manually. With this option ArgoCD creates the required namespace automatically.
+
+namespace-metadata.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  namespace: test
+spec:
+  syncPolicy:
+    managedNamespaceMetadata:
+      labels: 					# The labels to set on the application namespace
+        any: label
+        you: like
+      annotations: 				# The annotations to set on the application namespace
+        the: same
+        applies: for
+        annotations: on-the-namespace
+    syncOptions:
+    - CreateNamespace=true
+-----------------------------------------------
+
+
+Create new applicatoion manifest called app-create-ns.yaml
+
+app-create-ns.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: application-ns-create-autosync			# change name
+spec:
+  destination:
+    namespace: create-ns					        # change namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: argocd-application/directoryOfmanifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    syncOptions:							# add sync options section
+    - CreateNamespace=true						# enable CreateNamespace parameter
+    automated: {}							# enable application automated sync
+-----------------------------------------------
+
+Check if specified namespace exist
+	terminal --> k get ns		# the namepsace do not exist
+
+Create the application app-create-ns.yaml
+	terminal --> k apply -f app-create-ns.yaml
+
+	# result: application.argoproj.io/application-ns-create-autosync created
+
+Check if specified namespace is created
+	terminal --> k get ns | grep create-ns		# the namepsace is created
+
+In ArgoCD UI we can see that the application is created and synced.
+
+
+
+
+
+
+Prune last
+----------
+
+This sync option can be used in resource and application level !!!
+
+On resource level - If we delete 3 different resources this annotation will secure that this resource will bedeleted as last one.
+
+prune-last.yaml
+-----------------------------------------------
+metadata:
+  annotations:
+    argocd.argoproj.io/sync-options: PruneLast=true
+-----------------------------------------------
+
+
+
+On application level - If I have multiple application this policy will secure that this application will be removed as last.
+
+prune-last.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+spec:
+  syncPolicy:
+    syncOptions:
+    - PruneLast=true
+-----------------------------------------------
+
+
+
+
+
+
+
+
+
+Namespace metadata
+------------------
+
+This option is used only on application level !!!
+
+ArgoCD will create the namespace and set the specific labels and annotations in the manifest.
+
+namespace-metadata.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  namespace: test
+spec:
+  syncPolicy:
+    managedNamespaceMetadata:			# namepsace metadata section
+      labels: 					# The labels to set on the application namespace
+        any: label
+        you: like
+      annotations: 				# The annotations to set on the application namespace
+        the: same
+        applies: for
+        annotations: on-the-namespace
+    syncOptions:
+    - CreateNamespace=true			# create namespace option
+-----------------------------------------------
+
+
+
+
+
+
+
+
+Defining argocd application with Sync-policies-options using terraform
+======================================================================
+
+We will deploy application with sync options and policies with terraform.
+
+Provider we will use for argocd - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs
+
+Resource for argocd_application - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs/resources/application
+
+
+We have teraaform files as follow:
+	- providers.tf
+	- main.tf
+	- variables.tf
+	- terraform.tfvars
+
+
+providers.tf
+-----------------------------------------------
+terraform {
+  required_providers {
+    argocd = {
+      source  = "argoproj-labs/argocd"
+      version = "7.12.4"
+    }
+  }
+}
+
+provider "argocd" {
+  server_addr = var.server_addr
+  username    = var.username
+  password    = var.password
+  insecure    = var.insecure
+}
+-----------------------------------------------
+
+
+
+main.tf
+-----------------------------------------------
+resource "argocd_application" "application" {
+  metadata {
+    name      = "sync-policy-options-using-terraform"
+    namespace = var.namespace
+    labels = {
+      using_sync_policy_options = "true"
+    }
+  }
+
+  spec {
+    destination {
+      server    = var.destination_server
+      namespace = var.destination_namespace
+    }
+
+    source {						# source block
+      repo_url        = var.repo_url
+      path            = var.path
+      target_revision = var.target_revision
+    }
+    sync_policy {					# sync policy block
+      managed_namespace_metadata {
+        labels = var.namespace_metadata_labels
+      }
+      automated {					# sync automated options block
+        prune     = var.prune_enabled
+        self_heal = var.selfheal_enabled
+      }
+      sync_options = var.sync_options
+    }
+  }
+}
+-----------------------------------------------
+
+
+variables.tf
+-----------------------------------------------
+variable "username" {
+  type        = string
+  description = "Username Value"
+}
+
+variable "password" {
+  type        = string
+  description = "Password Value"
+}
+
+variable "namespace" {
+  type        = string
+  description = "Namespace Value"
+}
+
+variable "destination_namespace" {
+  type        = string
+  description = "Destination Namespace Value"
+}
+
+variable "destination_server" {
+  type        = string
+  description = "Destination Server Value"
+}
+
+variable "server_addr" {
+  type        = string
+  description = "server_addr Value"
+}
+
+variable "repo_url" {
+  type        = string
+  description = "Repo_url Value"
+}
+
+variable "path" {
+  type        = string
+  description = "Path Value"
+}
+
+variable "target_revision" {
+  type        = string
+  description = "Target_revision Value"
+}
+
+variable "insecure" {
+  type        = bool
+  description = "insecure Value as a boolean"
+}
+
+variable "prune_enabled" {
+  type        = bool
+  description = "Auto-prune Value as a boolean"
+}
+
+variable "selfheal_enabled" {
+  type        = bool
+  description = "Auto-selfheal Value as a boolean"
+}
+
+variable "sync_options" {
+  type        = list(string)
+  description = "List of sync options as a list of strings"
+}
+
+variable "namespace_metadata_labels" {
+  type        = map(string)
+  description = "Map of namespace metadata labels as a map of strings"
+}
+-----------------------------------------------
+
+
+terraform.tfvars
+-----------------------------------------------
+username              = "admin"
+password              = "password"
+namespace             = "argocd"
+destination_namespace = "sync-policy-options"
+destination_server    = "https://kubernetes.default.svc"
+server_addr           = "localhost:32074"
+insecure              = true
+repo_url              = "https://github.com/devopshobbies/argocd-tutorial.git"	# repo link
+path                  = "v03-argocd-applications/directoryOfmanifests"		# application folder
+target_revision       = "main"							# version by branch
+prune_enabled         = true							# prune option enabled
+selfheal_enabled      = true							# selfheal option enabled
+sync_options          = ["CreateNamespace=true", "FailOnSharedResource=true"]	# share policies and namespace creation option
+namespace_metadata_labels = {
+  created_by     = "Terraform"
+  Course_creator = "Mohammad"
+}
+-----------------------------------------------
+
+Format terraform files
+	terminal --> terraform fmt
+
+Download and install providers configurations
+	terminal --> terraform init			# result :Terraform has been successfully initialized!
+
+Validate terraform files
+	terminal --> terraform validate			# result: Success! The configuration is valid.
+
+Plan terraform resources
+	terminal --> terraform plan			# result: Plan: 1 to add, 0 to change, 0 to destroy.
+
+Apply terraform resources
+	terminal --> terraform apply
+	terminal --> yes
+
+	# result:
+	argocd_application.application: Creating...
+	argocd_application.application: Creation complete after 7s [id=sync-policy-options-using-terraform:argocd]
+
+	Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+
+We can check ArgoCD UI if the application is deployed successfully.
+
+
+Show the labels we configured with terraform	
+	terminal --> k get ns --show-labels
+
+	# result: sync-policy-options        Active   13m     Course_creator=Mohammad,created_by=Terraform,kubernetes.io/metadata.name=sync-policy-options
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
