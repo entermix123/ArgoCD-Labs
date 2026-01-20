@@ -1,0 +1,1211 @@
+04 - Argocd project & Defining Argocd projects using manifests and terraform
+
+Video Link - https://www.youtube.com/watch?v=VT4NTt5rUew&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=4
+
+Video Agenda:
+
+00:00 What is argocd project
+00:13 Default project
+00:16:30 Working with sourceRepos
+00:35:20 Working with destinations
+00:43:05 Working with resources
+00:55:35 Project roles and policies
+1:16:50 Defining projects using terraform
+
+Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+
+
+We will create and use new directory called '04-argocd-projects'.
+
+
+Restricting applications using projects in 3 ifferent ways, using blocks:
+-------------------------------------------------------------------------
+
+1. SourceRepos - uses only specified repositories. If repo not specified is used, the app cannot be deployed.
+Example 1:
+	- https://github.com/entermix123/ArgoCD-Labs.git
+
+Example 2:
+	- !https://github.com/entermix123/ArgoCD-Labs.git (if exclamation mark used infront, the repo becomes specificly excluded)
+	- '*' - all repositories except specificly excluded
+
+2. destinations:
+Example 1:
+	- namespace: '*'	- all namespaces
+	- server: '*'		- all servers
+Example 2:
+	- namespace: 'dev'					- specific namespaces only
+	- server: 'https://kubernetes.default.svc'		- specific servers only
+
+Example 3:
+	- namespace: '!dev'					- specific namespaces excluded
+	- server: '!https://kubernetes.default.svc'		- specific servers excluded
+
+
+3. resources - We manage applications by their resource type - cluster or namespace resources. For example: namespace is cluster resource and Deployment is namespace resource. We set application restrictions based on configurations in the specific block whitelist (allowed). We can use resources in the whitelists but not resources not specified.
+
+- clusterResourcesWhitelist
+	- group: ""
+	  kind: "Namepsace"
+
+- namespaceResourcesWhitelist
+	- group: "apps"
+	  kind: "Deployments"
+
+
+If we use Blacklists - we cannot use the specified resources, but we can use all not specified:
+
+- namespaceResourcesBlacklist
+	- group: "apps"
+	  kind: "Deployments"
+
+
+
+
+
+DEFAULT PROJECT IN ARGOCD
+=========================
+
+Set the default namespace to argocd
+	terminal --> k config set-context --current --namespace=argocd
+
+	# result: Context "kind-kind" modified.
+
+Verify current namespace
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME        CLUSTER     AUTHINFO    NAMESPACE
+	*         kind-kind   kind-kind   kind-kind   argocd
+
+
+List app projects
+	terminal --> k get appproject
+
+	# result:
+	NAME      AGE
+	default   6d6h				# this is the default project.
+	
+List the default project manifest template
+	terminal --> k get appproject default -o yaml
+
+# result:
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject					# kind template
+metadata:
+  creationTimestamp: "2025-12-10T11:39:51Z"
+  generation: 1
+  name: default						# name
+  namespace: argocd					# current namespace
+  resourceVersion: "1245"
+  uid: 8f9faeed-c6af-418f-b505-60b3f5dda6c1
+spec:
+  clusterResourceWhitelist:				# clusterResourceWhitelist restrictions - mentioned earlier
+  - group: '*'
+    kind: '*'
+  destinations:						# destination restrictions - mentioned earlier
+  - namespace: '*'
+    server: '*'
+  sourceRepos:						# sourceRepo restrictions - mentioned earlier
+  - '*'
+status: {}
+-----------------------------------------------
+
+
+
+
+CREATE NEW CUSTOM PROJECT WITH REPO RESTRICTIONS
+================================================
+
+In '04-argocd-projects/project-manifest-examples' folder we create project template called project-source-restriction.yaml. We use the template of the default project and remove the unnecessary fields. We endup with the manifest below:
+
+project-source-restriction.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject					# kind template
+metadata:
+  name: project-source-restriction			# name
+  namespace: argocd					# current namespace
+spec:
+  clusterResourceWhitelist:				# clusterResourceWhitelist restrictions
+  - group: '*'
+    kind: '*'
+  destinations:						# destination restrictions
+  - namespace: '*'
+    server: '*'
+  sourceRepos:						# sourceRepo restrictions
+  - 'https://github.com/entermix123/ArgoCD-Labs.git'  	# use specifically this repo
+  # - '!!https://github.com/entermix123/ArgoCD-Labs.git' # Use '!' to place repo in BlackList
+  # - '*' 						 # '*' means we are allowed to use any repos
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+
+Create our first project
+	terminal --> k apply -f project-source-restriction.yaml
+
+	# result: appproject.argoproj.io/project-source-restriction created
+
+Confirm project creation
+	terminal --> k get appproject
+
+	# result:
+	NAME                         AGE
+	default                      6d7h
+	project-source-restriction   70s		# our new project
+
+
+Describe our project
+	terminal --> k describe appproj project-source-restriction
+
+# result:
+-----------------------------------------------
+Name:         project-source-restriction
+Namespace:    argocd
+Labels:       <none>
+Annotations:  <none>
+API Version:  argoproj.io/v1alpha1
+Kind:         AppProject
+Metadata:
+  Creation Timestamp:  2025-12-16T19:07:07Z
+  Generation:          1
+  Resource Version:    154706
+  UID:                 f95dfe3d-c907-409f-b6c8-69eb0742da1d
+Spec:
+  Cluster Resource Whitelist:
+    Group:  *
+    Kind:   *
+  Destinations:
+    Namespace:  *
+    Server:     *
+  Source Repos:
+    https://github.com/entermix123/ArgoCD-Labs.git
+Events:  <none>
+-----------------------------------------------
+
+
+
+
+
+
+Create application manifest file called app-1.yml
+-------------------------------------------------
+
+Create application manifest file named app-1.yaml and connect it with our project:
+
+app-1.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: app-1                                   # name of the application
+spec:
+  destination:
+    namespace: default	                        # destination namespace
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: project-source-restriction		# destination project				
+  source:
+    path: argocd-application/helm-charts/nginx     		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
+    targetRevision: main					# use main branch as source version
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+If we set a repository different than the list in the project whitelist the app cannot be deployed !
+
+Deploy the application app-1.yaml
+	terminal --> k apply -f app-1.yaml
+
+	# result: application.argoproj.io/app-1 created
+
+
+
+
+CONFIRM APP-1 DEPLYMENT
+-----------------------
+
+I. Using ArgoCD UI to check if the application deployment
+1. Find ArgoCD admin password
+	powershell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+2. Login to ArgoCD UI on localhost:32074
+
+3. Open the app-1 application and check it
+
+
+II. Using ArgoCD CLI to check if the application is deployed
+1. login to  ArgoCD server with CLI
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin
+	terminal --> password
+
+	# result:
+	'admin:login' logged in successfully
+	Context 'localhost:32074' updated
+
+2. List apps in argocd server
+	terminal --> k get app
+
+	# result:
+	NAME                       SYNC STATUS   HEALTH STATUS
+	app-1                      OutOfSync     Missing			# this is our app
+
+3. List apps details
+	terminal --> argocd app list
+NAME                             CLUSTER                         NAMESPACE  PROJECT                     STATUS     HEALTH   SYNCPOLICY  CONDITIONS  REPO                                            PATH                                     TARGET
+argocd/app-1                     https://kubernetes.default.svc  default    project-source-restriction  OutOfSync  Missing  Manual      <none>      https://github.com/entermix123/ArgoCD-Labs.git  argocd-application/helm-charts/nginx     main
+
+
+Now we can SYNC our app from ArgoCD UI
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+Now the application is synced and working properly.
+
+Delete the application in ArgoCD UI to free resources.
+
+
+
+
+CREATE NEW CUSTOM PROJECT WITH DESTINATION RESTRICTIONS
+=======================================================
+
+In '04-argocd-projects/project-manifest-examples' folder we create project template called project-destination-restriction.yaml.
+
+project-destination-restriction.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: project-destination-restriction
+  namespace: argocd
+spec:
+  clusterResourceWhitelist:
+  - group: '*'
+    kind: '*'
+  destinations:
+  - namespace: 'dev' 			## Use '!dev' to place namespace in BlackList
+    server: '*' 			## '*' means we are allowed to use any servers
+  sourceRepos:
+  - '*'
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+
+Create our first project
+	terminal --> k apply -f project-destination-restriction.yaml
+
+	# result: appproject.argoproj.io/project-destination-restriction created
+
+Confirm project creation
+	terminal --> k get appproject
+
+	# result:
+	NAME                              AGE
+	default                           6d19h
+	project-destination-restriction   11s		# our new project
+	project-source-restriction        12h
+
+
+
+
+Create application manifest file called app-dest-restrict.yml
+-------------------------------------------------------------
+
+Create application manifest file named app-dest-restrict.yaml and connect it with our project:
+
+app-dest-restrict.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: app-dest-restrict                       # name of the application
+spec:
+  destination:
+    namespace: dev	                        # destination namespace
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: project-destination-restriction	# project name				
+  source:
+    path: argocd-application/helm-charts/nginx     		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
+    targetRevision: main					# use main branch as source version
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+If we set a namespace different than in the project whitelist the app cannot be deployed !
+
+Create dev namespace
+	terminal --> k create ns dev
+
+	# result: namespace/dev created
+
+Deploy the application app-dest-restrict.yaml
+	terminal --> k apply -f app-dest-restrict.yaml
+
+	# result: application.argoproj.io/app-dest-restrict created
+
+
+CONFIRM APP-DEST-RESTRICT DEPLYMENT
+-----------------------------------
+
+I. Using ArgoCD UI to check if the application deployment
+1. Find ArgoCD admin password
+	powershell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+2. Login to ArgoCD UI on localhost:32074
+
+3. Open the app-dest-restrict application and check it
+
+
+II. Using ArgoCD CLI to check if the application is deployed
+1. login to  ArgoCD server with CLI
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin
+	terminal --> password
+
+	# result:
+	'admin:login' logged in successfully
+	Context 'localhost:32074' updated
+
+2. List apps in argocd server
+	terminal --> k get app
+
+	# result:
+	NAME                SYNC STATUS   HEALTH STATUS
+	app-1               Synced        Healthy
+	app-dest-restrict   OutOfSync     Missing		# our app
+
+
+3. List apps details
+	terminal --> argocd app list
+
+# result:
+NAME                      CLUSTER                         NAMESPACE  PROJECT                          STATUS     HEALTH   SYNCPOLICY  CONDITIONS  REPO                                            PATH                                  TARGET
+argocd/app-1              https://kubernetes.default.svc  default    project-source-restriction       Synced     Healthy  Manual      <none>      https://github.com/entermix123/ArgoCD-Labs.git  argocd-application/helm-charts/nginx  main
+argocd/app-dest-restrict  https://kubernetes.default.svc  dev        project-destination-restriction  OutOfSync  Missing  Manual      <none>      https://github.com/entermix123/ArgoCD-Labs.git  argocd-application/helm-charts/nginx  main
+
+We can see that our app-dest-restrict is outof sync
+
+Now we can SYNC our app from ArgoCD UI
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+Now the application is synced and working properly.
+
+Delete the application in ArgoCD UI to free resources.
+
+
+
+
+
+
+CREATE NEW CUSTOM PROJECT WITH RESOURCE RESTRICTIONS
+====================================================
+
+
+In '04-argocd-projects/project-manifest-examples' folder we create project template called project-resource-whitelist.yaml.
+
+project-resource-whitelist.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: project-resource-whitelist
+  namespace: argocd
+spec:
+  clusterResourceWhitelist:
+  - group: '*' ## it means we are allowed to use any kinds of clusterscoped resources
+    kind: '*'
+  namespaceResourceWhitelist:
+  - group: ''
+    kind: 'ServiceAccount' ## it means we are allowd to use 'serviceaccount' namespacescoped resource Only
+  destinations:
+  - namespace: '*'
+    server: '*'
+  sourceRepos:
+  - '*'
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+
+Create our first project
+	terminal --> k apply -f project-resource-whitelist.yaml
+
+	# result: appproject.argoproj.io/project-resource-whitelist created
+
+Confirm project creation
+	terminal --> k get appproject
+
+	# result:
+	NAME                              AGE
+	default                           7d2h
+	project-destination-restriction   6h28m
+	project-resource-whitelist        11s		# our new project
+	project-source-restriction        18h
+
+
+
+
+Create application manifest file called app-resource-whitelist.yml
+------------------------------------------------------------------
+
+Create application manifest file named app-resource-whitelist.yaml and connect it with our project:
+
+app-resource-whitelist.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: app-resource-whitelist                  # name of the application
+spec:
+  destination:
+    namespace: default	                        # destination namespace
+    server: https://kubernetes.default.svc 	# default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: project-resource-whitelist    	# project name				
+  source:
+    path: argocd-application/helm-charts/nginx     		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
+    targetRevision: main					# use main branch as source version
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+If we use nmamespacescoped resource different than ServiceAccount as set in the project-resource-whitelist.yaml the app cannot be deployed !
+
+Deploy the application app-resource-whitelist.yaml
+	terminal --> k apply -f app-resource-whitelist.yaml
+
+	# result: application.argoproj.io/app-resource-whitelist created
+
+
+CONFIRM APP-DEST-RESTRICT DEPLYMENT
+-----------------------------------
+
+I. Using ArgoCD UI to check if the application deployment
+1. Find ArgoCD admin password
+	powershell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+2. Login to ArgoCD UI on localhost:32074
+
+3. Open the app-dest-restrict application and check it
+
+
+II. Using ArgoCD CLI to check if the application is deployed
+1. login to  ArgoCD server with CLI
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin
+	terminal --> password
+
+	# result:
+	'admin:login' logged in successfully
+	Context 'localhost:32074' updated
+
+2. List apps in argocd server
+	terminal --> k get app
+
+	# result:
+	NAME                     SYNC STATUS   HEALTH STATUS
+	app-1                    Synced        Healthy
+	app-dest-restrict        Synced        Healthy
+	app-resource-whitelist   OutOfSync     Missing			# our new app
+
+
+3. List apps details
+	terminal --> argocd app list
+
+# result:
+NAME                           CLUSTER                         NAMESPACE  PROJECT                          STATUS     HEALTH   SYNCPOLICY  CONDITIONS  REPO                                            PATH                                  TARGET
+argocd/app-resource-whitelist  https://kubernetes.default.svc  default    project-resource-whitelist       OutOfSync  Missing  Manual      <none>      https://github.com/entermix123/ArgoCD-Labs.git  argocd-application/helm-charts/nginx  main
+
+We can see that our app-dest-restrict is outof sync
+
+Now we can SYNC our app from ArgoCD UI
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+We cannot sync the app because we are missing vital resources - Service and Deployment. They are not in our whitelist of the project - We allowed only Serviceaccount in the whitelist in the project manifest.
+
+Delete the application in ArgoCD UI to free resources.
+
+
+
+
+
+
+
+CREATE NEW CUSTOM PROJECT WITH RESOURCE RESTRICTIONS
+====================================================
+
+
+In '04-argocd-projects/project-manifest-examples' folder we create project template called project-resource-blacklist.yaml.
+
+project-resource-blacklist.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: project-resource-blacklist
+  namespace: argocd
+spec:
+  clusterResourceWhitelist:
+  - group: '*' ## it means we are allowed to use any kinds of clusterscoped resources
+    kind: '*'
+  namespaceResourceBlacklist:
+  - group: ''
+    kind: 'ServiceAccount' ## it means we are NOT allowd to use 'serviceaccount' namespacescoped resource
+  destinations:
+  - namespace: '*'
+    server: '*'
+  sourceRepos:
+  - '*'
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+
+Create our first project
+	terminal --> k apply -f project-resource-blacklist.yaml
+
+	# result: appproject.argoproj.io/project-resource-blacklist created
+
+Confirm project creation
+	terminal --> k get appproject
+
+	# result:
+	NAME                              AGE
+	default                           7d2h
+	project-destination-restriction   7h7m
+	project-resource-blacklist        8s		# our new project
+	project-resource-whitelist        39m
+	project-source-restriction        19h
+
+
+
+Create application manifest file called app-resource-whitelist.yml
+------------------------------------------------------------------
+
+Create application manifest file named app-resource-blacklist.yaml and connect it with our project:
+
+app-resource-blacklist.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: app-resource-blacklist                      # name of the application
+spec:
+  destination:
+    namespace: default	                            # destination namespace
+    server: https://kubernetes.default.svc 	    # default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: project-resource-blacklist			
+  source:
+    path: argocd-application/helm-charts/nginx     		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
+    targetRevision: main					# use main branch as source version
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+If we use nmamespacescoped resource included in the project-resource-blacklist.yaml the app cannot be deployed !
+
+Deploy the application app-resource-blacklist.yaml
+	terminal --> k apply -f app-resource-blacklist.yaml
+
+	# result: application.argoproj.io/app-resource-blacklist created
+
+
+CONFIRM APP-DEST-RESTRICT DEPLYMENT
+-----------------------------------
+
+I. Using ArgoCD UI to check if the application deployment
+1. Find ArgoCD admin password
+	powershell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+2. Login to ArgoCD UI on localhost:32074
+
+3. Open the app-dest-restrict application and check it
+
+
+II. Using ArgoCD CLI to check if the application is deployed
+1. login to  ArgoCD server with CLI
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin
+	terminal --> password
+
+	# result:
+	'admin:login' logged in successfully
+	Context 'localhost:32074' updated
+
+2. List apps in argocd server
+	terminal --> k get app
+
+	# result:
+	NAME                     SYNC STATUS   HEALTH STATUS
+	app-1                    Synced        Healthy
+	app-dest-restrict        Synced        Healthy
+	app-resource-whitelist   OutOfSync     Missing			# our new app
+
+
+3. List apps details
+	terminal --> argocd app list
+
+# result:
+NAME                           CLUSTER                         NAMESPACE  PROJECT                     STATUS     HEALTH   SYNCPOLICY  CONDITIONS  REPO                                            PATH                                  TARGET
+argocd/app-resource-blacklist  https://kubernetes.default.svc  default    project-resource-blacklist  OutOfSync  Missing  Manual      <none>      https://github.com/entermix123/ArgoCD-Labs.git  argocd-application/helm-charts/nginx  main
+
+We can see that our app-resource-blacklist is outof sync
+
+Now we can SYNC our app from ArgoCD UI
+	- Click "SYNC" button
+	- Click "SYNCHRONIZE" button
+
+We cannot sync the app because we are missing vital resources - Serviceaccount. Serviceaccount is in our blacklist of the project - We forbid to use Serviceaccount in the blacklist in the project manifest.
+
+Delete the application in ArgoCD UI to free resources.
+
+
+
+
+
+
+
+
+
+PROJECT ROLES AND POLICIES
+==========================
+
+Project includes feature called roles that enable automated access to a project's applications. These can be used to give a CI pipeline a restricted set of permissions. For example a CI system may only be able to sync a single app / read single app, bit not change its source or destination. Projects can have multiple roles and these roles can have different access granted to them. These permissions called policies and they are stored with in the role as a list of policies strings. A role policy can only grant access to that role and are limited to our application within the role's project. However policies have an option for granted wildcard access to any application within the project. If we want to grant a system access to the application of a project we can use project roles. And by using roles we can generate a token to access an external system to sync, get, create or delete an application. These permissions can be set by using project roles and we can generate tokens by using project roles. 
+
+
+
+CREATE A PROJECT WITH ROLES
+---------------------------
+
+In '04-argocd-projects/project-manifest-examples' folder we create project manifest file called project-role.yaml.
+
+
+project-role.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: project-role
+  namespace: argocd
+spec:
+  clusterResourceWhitelist:
+  - group: '*'
+    kind: '*'
+  namespaceResourceWhitelist:
+  - group: '*'
+    kind: '*'
+  destinations:
+  - namespace: '*'
+    server: '*'
+  sourceRepos:
+  - '*'
+  roles:								# roles section
+    - name: read-sync							# role name
+      description: "this role can be used for reading and sync applications"
+      policies:										# policies section
+        - p, proj:project-role:read-sync, applications, get, project-role/*, allow
+        - p, proj:project-role:read-sync, applications, sync, project-role/*, allow
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+ - p, proj:project-role:read-sync, applications, get, project-role/*, allow
+
+	# p			- project
+	# proj:			- project object
+	# project-role:		- project name
+	# read-sync,		- role name
+	# applications,		- role target obejcrt
+	# get,			- role allowed actions
+	# project-role/*,	- project name and its specific application or all applications like in this example
+	# allow			- permission type
+
+
+Create the project and its roles
+	terminal --> k apply -f project-role.yaml
+
+	# result: appproject.argoproj.io/project-role created
+
+Confirm project creation
+	terminal --> k get appproject
+
+	# result:
+	NAME                              AGE
+	default                           7d3h
+	project-destination-restriction   8h
+	project-resource-blacklist        54m
+	project-resource-whitelist        93m
+	project-role                      20s		# our new project
+	project-source-restriction        20h
+
+
+GENERATE TOKENS FROM THE PROJECT ROLES
+--------------------------------------
+
+Generate token for the roles configured in the project 
+	terminal --> argocd proj role create-token project-role read-sync
+
+		# argocd		- common argocd command
+		# proj			- argocd object
+		# role 			- argocd sub object
+		# create-token		- action
+		# project-role		- project name
+		# read-sync		- role name
+
+# result:
+
+Create token succeeded for proj:project-role:read-sync.
+  ID: 04d64145-0b56-42fe-bb86-82d5176a6168
+  Issued At: 2025-12-17T17:36:04+02:00
+  Expires At: Never
+  Token: 
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+
+
+Create application manifest file called app-roles.yml
+-----------------------------------------------------
+
+Create application manifest file named app-resource-blacklist.yaml and connect it with our project:
+
+app-roles.yml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: 
+  name: app-roles		                    # name of the application
+spec:
+  destination:
+    namespace: default	                            # destination namespace
+    server: https://kubernetes.default.svc 	    # default kubernetese cluster: terminal --> argocd cluster list --grpc-web
+  project: project-role			
+  source:
+    path: argocd-application/helm-charts/nginx     		# the path in the repo to the apllication manifests
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git	# path to the argocd lab repo
+    targetRevision: main					# use main branch as source version
+-----------------------------------------------
+save changes: escape, :wq!, enter
+
+
+Deploy the application app-roles.yml
+	terminal --> k apply -f app-roles.yml
+
+	# result: application.argoproj.io/app-roles created
+
+
+CONFIRM APP-DEST-RESTRICT DEPLYMENT
+-----------------------------------
+
+I. Using ArgoCD UI to check if the application deployment
+1. Find ArgoCD admin password
+	powershell terminal --> k -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
+
+2. Login to ArgoCD UI on localhost:32074
+
+3. Open the app-dest-restrict application and check it
+
+
+II. Using ArgoCD CLI to check if the application is deployed
+1. login to  ArgoCD server with CLI
+	terminal --> argocd login localhost:32074 --insecure --grpc-web --username admin
+	terminal --> password
+
+	# result:
+	'admin:login' logged in successfully
+	Context 'localhost:32074' updated
+
+2. List apps in argocd server
+	terminal --> k get app
+
+	# result:
+	NAME        SYNC STATUS   HEALTH STATUS
+	app-roles   OutOfSync     Missing		# our new app
+	
+
+3. List apps details
+	terminal --> argocd app list
+
+# result:
+NAME              CLUSTER                         NAMESPACE  PROJECT       STATUS     HEALTH   SYNCPOLICY  CONDITIONS  REPO                                            PATH                                  TARGET
+argocd/app-roles  https://kubernetes.default.svc  default    project-role  OutOfSync  Missing  Manual      <none>      https://github.com/entermix123/ArgoCD-Labs.git  argocd-application/helm-charts/nginx  main
+
+
+List applications with the role we created in the 'project-role' project - read-sync
+	terminal --> argocd app list --auth-token xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# result:
+NAME              CLUSTER                         NAMESPACE  PROJECT       STATUS     HEALTH   SYNCPOLICY  CONDITIONS  REPO                                            PATH                                  TARGET
+argocd/app-roles  https://kubernetes.default.svc  default    project-role  OutOfSync  Missing  Manual      <none>      https://github.com/entermix123/ArgoCD-Labs.git  argocd-application/helm-charts/nginx  main
+
+We can see that the role we created can see the app and the application is out of sync
+
+
+
+
+SYNC APPLICATION WITH ADMIN AND WITH CREATED ROLE
+-------------------------------------------------
+
+1. Sync the application with admin user using ArgoCD CLI
+	terminal --> argocd app sync app-roles
+		
+		# argocd 			- common argocd command
+		# app				- target object type
+		# sync				- action
+		# app-roles			- app name
+
+# result:
+...
+Message:            successfully synced (all tasks run)
+
+GROUP  KIND            NAMESPACE  NAME             STATUS  HEALTH   HOOK  MESSAGE
+       ServiceAccount  default    app-roles-nginx  Synced                 serviceaccount/app-roles-nginx created
+       Service         default    app-roles-nginx  Synced  Healthy        service/app-roles-nginx created
+apps   Deployment      default    app-roles-nginx  Synced  Healthy        deployment.apps/app-roles-nginx created
+
+We can check in ArgoCD UI that our app-roles is synced.
+
+
+In purpose to check if we can sync the application with the role we created earlier, we will delete the app and create it again
+
+Delete the app
+	terminal --> argocd app delete app-roles --yes		# result: application 'app-roles' deleted
+
+Create the app again
+	terminal --> k apply -f app-roles.yml			# result: application.argoproj.io/app-roles created
+
+
+
+Sync the app with the role using ArgoCD CLI
+	terminal --> argocd app sync app-roles --auth-token xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+		# argocd 			- common argocd command
+		# app				- target object type
+		# sync				- action
+		# app-roles			- app name
+		# --auth-token xxx..xxx		- act as the role we created using the generated token
+
+# result
+...
+Message:            successfully synced (all tasks run)
+
+GROUP  KIND            NAMESPACE  NAME             STATUS  HEALTH   HOOK  MESSAGE
+       ServiceAccount  default    app-roles-nginx  Synced                 serviceaccount/app-roles-nginx created
+       Service         default    app-roles-nginx  Synced  Healthy        service/app-roles-nginx created
+apps   Deployment      default    app-roles-nginx  Synced  Healthy        deployment.apps/app-roles-nginx created
+
+In ArgoCD UI we can see that the app-roles is synced. This means that the policy we set in the porject manifest is working.
+
+
+
+
+
+
+
+CREATING ARGOCD PROJECTS USING TERRAFORM
+========================================
+
+
+In '04-argocd-projects\project-using-terraform' folder we create the files
+	- providers.tf
+	- main.tf
+	- variables.tf
+	- terraform.tfvars
+
+
+We can find different providers - https://registry.terraform.io/search/providers?q=argocd%20providers
+
+We will use this provider - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs
+
+Craete providers.tf and set the configurations from the choosen provider.
+
+
+providers.tf
+-----------------------------------------------
+terraform {
+  required_providers {
+    argocd = {
+      source  = "argoproj-labs/argocd"
+      version = "7.12.4"
+    }
+  }
+}
+
+provider "argocd" {
+  server_addr = var.server_addr
+  username    = var.username
+  password    = var.password
+  insecure    = var.insecure
+}
+
+-----------------------------------------------
+
+
+
+
+Craete main.tf for set ArgoCD project configuration.
+
+We can find ArgoCD project resources and example usage here - https://registry.terraform.io/providers/argoproj-labs/argocd/latest/docs/resources/project
+
+Replace all values with the values configured in values.tf and actually set in terraform.tfvars file. 
+
+We also use dynamic blocks to configure multiple restrictions by destination, cluster whitelist, resources whitelist plus roles. Syntax. These dynamic blocks are configured as loops in values.tf file. We can add or remove multiple blocks in one dynamic block to reduce the lines in our main.tf file and acheave better readiness.
+
+
+main.tf
+-----------------------------------------------
+locals {
+  roles_count = length(var.roles)
+}
+
+resource "argocd_project" "terraform-project" {
+  metadata {
+    name      = var.project_name
+    namespace = var.project_namespace
+    labels    = var.project_labels
+  }
+
+  spec {
+    description = var.project_description
+
+    source_namespaces = var.source_namespaces
+    source_repos      = var.source_repos
+
+    dynamic "destination" {
+      for_each = var.destinations
+      content {
+        server    = destination.value.server
+        namespace = destination.value.namespace
+      }
+    }
+
+    dynamic "cluster_resource_whitelist" {
+      for_each = var.cluster_resources_whitelist
+      content {
+        group = cluster_resource_whitelist.value.group
+        kind  = cluster_resource_whitelist.value.kind
+      }
+    }
+
+    dynamic "namespace_resource_whitelist" {
+      for_each = var.namespace_resources_whitelist
+      content {
+        group = namespace_resource_whitelist.value.group
+        kind  = namespace_resource_whitelist.value.kind
+      }
+    }
+
+    dynamic "role" {
+      for_each = var.roles
+      content {
+        name     = role.value.name
+        policies = role.value.policies
+      }
+    }
+  }
+}
+
+resource "argocd_project_token" "secret" {
+  count   = local.roles_count
+  project = var.project_name
+  role    = var.roles[count.index]["name"]
+  depends_on = [
+    argocd_project.terraform-project
+  ]
+}
+-----------------------------------------------
+
+
+
+Create variables.tf and set all used variables names and their type.
+
+variables.tf
+-----------------------------------------------
+variable "server_addr" {
+  type        = string
+  description = "The server address"
+}
+
+variable "username" {
+  type        = string
+  description = "The Username"
+}
+
+variable "password" {
+  type        = string
+  description = "The Password"
+}
+
+variable "insecure" {
+  type        = bool
+  description = "The Connection Insecure flag"
+}
+
+variable "project_name" {
+  type        = string
+  description = "The Name of the Project"
+}
+
+variable "project_namespace" {
+  type        = string
+  description = "The Namespace of the Project"
+}
+
+variable "project_labels" {					# dynamic block
+  type        = map(string)
+  description = "The Labels of the Project"
+}
+
+variable "project_description" {
+  type        = string
+  description = "The Description of the Project"
+}
+
+variable "source_namespaces" {
+  type        = list(string)
+  description = "The Source Namespaces of the Project"
+}
+
+variable "source_repos" {
+  type        = list(string)
+  description = "The Source Repos of the Project"
+}
+
+variable "destinations" {					# dynamic block
+  type = map(object({
+    server    = string,
+    namespace = string
+  }))
+}
+
+variable "cluster_resources_whitelist" {			# dynamic block
+  type = map(object({
+    group = string,
+    kind  = string
+  }))
+}
+
+variable "namespace_resources_whitelist" {			# dynamic block
+  type = map(object({
+    group = string,
+    kind  = string
+  }))
+}
+
+variable "roles" {						# list block
+  type = list(object({
+    name     = string,
+    policies = list(string)
+  }))
+}
+-----------------------------------------------
+
+
+
+
+terraform.tfvars
+-----------------------------------------------
+server_addr       = "localhost:32074"
+username          = "admin"
+password          = "password"
+insecure          = true
+project_name      = "terraform-project"
+project_namespace = "argocd"
+project_labels = {
+  acceptance = "true"
+}
+project_description = "this project has been created using terraform"
+source_namespaces   = ["argocd"]
+source_repos        = ["*"]
+destinations = {
+  destination_one = {
+    server    = "*",
+    namespace = "dev"
+  },
+  destination_two = {
+    server    = "*",
+    namespace = "prod"
+  }
+}
+cluster_resources_whitelist = {
+  resource_one = {
+    group = "*"
+    kind  = "*"
+  }
+}
+namespace_resources_whitelist = {
+  resource_one = {
+    group = "apps"
+    kind  = "Deployment"
+  },
+  resource_two = {
+    group = ""
+    kind  = "Service"
+  }
+}
+roles = [
+  {
+    name = "read-sync"
+    policies = [
+      "p, proj:terraform-project:read-sync, applications, get, terraform-project/*, allow",
+      "p, proj:terraform-project:read-sync, applications, sync, terraform-project/*, allow",
+    ]
+  }
+]
+-----------------------------------------------
+
+
+
+Format terraform files
+	terminal --> terraform fmt
+
+Initiate terraform configuration (download and install terraform provider configuration)
+	terminal --> terraform init		
+
+	# result: Terraform has been successfully initialized!
+
+Validate terraform confugration
+	terminal --> terraform validate		
+
+	# result: Success! The configuration is valid.
+
+Plan terraform resources
+	terminal --> terraform plan	
+
+	# result: Plan: 2 to add, 0 to change, 0 to destroy.
+
+	We can go over and see exactly what resources will be created on our system.
+
+Apply terraform configuration
+	terminal --> terraform apply
+	terminal --> yes
+
+	# result:
+	argocd_project.terraform-project: Creating...
+	argocd_project.terraform-project: Creation complete after 2s [id=terraform-project]
+	argocd_project_token.secret[0]: Creating...
+	argocd_project_token.secret[0]: Creation complete after 0s [id=1fe46445-4fe0-4187-9e92-0f9240571db3]
+
+	Apply complete! Resources: 2 added, 0 changed, 0 destroyed.
+
+
+Confirm project creation:
+	terminal --> k get appproj
+
+	# result:
+	NAME                              AGE
+	default                           7d20h
+	terraform-project                 98s		# our new project
+
+
+We can view or edit our argocd project  
+	terminal --> k describe appproj terraform-project
+	terminal --> k edit appproj terraform-project
+
+
+We can see generated token in terraform.tfstate and use it in our CI systems
+	terminal --> cat terraform.tfstate
+
+
+
