@@ -1,0 +1,1679 @@
+Video link - https://www.youtube.com/watch?v=ugB7v5WadGY&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=16
+
+Video Agenda:
+
+00:00 Workflows Inputs Parameters
+00:16:13 Workflows Outputs Parameters
+00:28:43 Workflow Templates and Cluster Workflow Templates
+00:46:20 Cron Workflows
+01:02:33 Workflows Artifacts and Configuring MinIO as Artifact Repository
+
+Video Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+Prerequisites
+=============
+
+1. We should have atleast one running cluster:
+----------------------------------------------
+
+List clusters
+	terminal --> kubectl config get-clusters
+
+	# result: 
+	kind-kind
+	cluster2
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       			# current cluster
+
+2. We need to have installed:
+-----------------------------
+	- Helm
+	- Argo Workflows
+	- Argo CLI
+
+We can find prerequisites installation instructions and resources here - https://github.com/entermix123/ArgoCD-Labs/blob/main/00-Install%20Guide/Kubernetes%20Kind%20ArgoCD%20Install%20Guide%20for%20Windows.txt
+
+
+3. Create namespace called 'workflows' and set it as default namespace
+----------------------------------------------------------------------
+
+Create 'workflows' namespace
+	terminal --> k create ns workflows
+
+	# result: namespace/workflows created
+
+Set 'workflows' namespace as default namepsace
+	terminal --> k config set-context --current --namespace=workflows
+
+	# result: Context "kind-kind" modified.
+
+Confirm default namespace modification
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       workflows	# current cluster and namepsace
+
+4. Create a rolebinding for admin service account that will execute workflows in the 'workflows' namespace
+----------------------------------------------------------------------------------------------------------
+
+Create rolebinding for admin role
+	terminal --> k create rolebinding default-admin --clusterrole=admin --serviceaccount=workflows:default -n workflows
+
+		# k 					- common kubectl command
+		# create				- action
+		# rolebinding				- object
+		# default-admin				- object name
+		# --clusterrole=admin			- used cluster role
+		# --serviceaccount=workflows:default	- target service account <namespcae>:<useraccount>
+		# -n workflows				- target namespace
+	
+	
+	# result: rolebinding.rbac.authorization.k8s.io/default-admin created
+
+
+We granted admin privileges of argo default service account in workflows namespace.
+
+We should be able to access Argo Workflows UI and execute workflows - https://argo-workflows.localhost:32074/workflows/workflows/
+
+
+
+
+
+
+Workflows Inputs Parameters
+===========================
+
+We will use resource called workflow-input-parameters.yaml. We will use the same template from the last exercise.
+If we set and argument configuration but don't pass the argument value, argo will respond with error.
+
+We can pass input parameter values in a few ways
+	- as a global parameter in the 'spec.arguments.parameters.name.values' section
+	- as a local parameter in the 'templates.name.inputs.parameters' section in the template definition
+	- as a local parameter in the 'tasks.A.arguments.parameters.message' section in the invoker template
+	- as a terminal command using '-p' flag - 
+		example: terminal --> argo submit template_name.yaml -p 'message="hello from terminal"'
+
+We can use the input parameters in few ways
+	- set the parameter name and value in the template definition - 'templates.name.inputs.parameters' section
+	- as a part of a specific step/task - when we call the invoker template
+		exampel: dag-template invoker task A
+
+
+workflow-input-parameters.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-wf-                    # Name of this Workflow - automatically generated with this prefix
+spec:
+  arguments:
+    parameters:
+      - name: message
+        value: "Hello from spec.arguments"      # We can set the message here or in the inputs.parameters section
+        # We can also comment out the value from here and pass it using "-p" when submitting the workflow,
+        # example: argo submit templates.yml -p 'message="hello from terminal"'
+  entrypoint: dag-template                  # Defines "dag-template" as the "main" template
+  templates:
+  - name: dag-template                      # Defining the "dag template" as a Template Invocator, You must use one of "dag" or "steps" as a template invocator
+    dag:
+      tasks:
+        - name: A
+          template: container-template
+          arguments:
+            parameters:
+              - name: message
+                # value: "Hello from tasks.A.arguments.parameters.message"    # this is example of usage of input parameter as invoker template arguments
+                value: "{{workflow.parameters.message}}"    # this is example of usage of input parameter as global variable 
+                # we set the message as a variable that we can set in inputs.parameters, spec.arguments sections 
+                # or pass it in the command line durring workflow submission
+        - name: B
+          template: script-template
+          dependencies: [A]
+        - name: C
+          template: resource-template
+          dependencies: [A]
+        - name: D
+          template: delay-template
+          dependencies: [B, C]
+# - name: steps-template # Defining the "steps template" as a Template Invocator, You must use one of "dag" or "steps" as a template invocator
+#   steps:
+#   - - name: step1
+#       template: container-template
+#   - - name: step2a
+#       template: script-template
+#     - name: step2b
+#       template: resource-template
+#   - - name: step3
+#       template: delay-template
+
+
+  - name: container-template                  # Defining the "container template" as a Template Definition
+    inputs:
+      parameters:
+        - name: message
+          # value: "Hello from inputs.parameters"    # we can set the message here or in the spec.arguments section
+    container:
+      image: alpine
+      command: ["/bin/sh", "-c"]
+      args: ["echo {{inputs.parameters.message}}"]  # set to print message with template definition input parameter variable
+  - name: script-template                     # Defining the "script template" as a Template Definition
+    script:
+      image: python:alpine3.6
+      command: [python]
+      source: |
+        import random
+        i = random.randint(1, 100)
+        print(i)
+  - name: resource-template                   # Defining the "resource template" as a Template Definition
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          generateName: argo-wf-resource-template-cm-
+        data:
+          created_by: argo-workflows
+  - name: delay-template                     # Defining the "delay template" as a Template Definition
+    suspend:
+      duration: "20s"
+-------------------------------------------------
+
+Submit the template with spceified message paramater 
+	terminal --> argo submit workflow-input-parameters.yaml
+
+	# result:
+	Name:                argo-wf-xhtlf
+	Namespace:           workflows
+	ServiceAccount:      unset (will run with the default ServiceAccount)
+	Status:              Pending
+	Created:             Sun Jan 11 12:27:03 +0200 (now)
+	Progress:
+	Parameters:
+	  message:           hello from terminal
+
+Confirm workflow submission
+	terminal --> k get wf
+
+	# result:
+	NAME            STATUS    AGE   MESSAGE
+	rgo-wf-xhtlf   Running   32s
+
+We should be able to see the workflow execution on https://argo-workflows.localhost:32074/workflows/workflows/
+
+We can access every step logs in the step details.
+
+
+
+
+
+
+
+
+
+
+
+Workflows Outputs Parameters
+============================
+
+We will use the same template as in the input parameters example but configred with usage of outputs.
+
+We can configure output in the template definition ('script-template' in this example) with specific value or automatically generated value (random number as in the example). We use this output parameter as a input parameter in other templates ('resource-template' to create configmap resource). The value of the output is taken after its generation (in step/task that starts after the script-template is executed). This mean that in taks B we generate the output value and in task C we use it as input parameter.
+
+
+workflow-output-parameters.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-wf-                    # Name of this Workflow
+spec:
+  arguments:
+  entrypoint: dag-template                  # Defines "dag-template" as the "main" template
+  templates:
+  - name: dag-template                      # Defining the "dag template" as a Template Invocator, You must use one of "dag" or "steps" as a template invocator
+    dag:
+      tasks:
+        - name: A
+          template: container-template
+          arguments:
+        - name: B
+          template: script-template
+          dependencies: [A]
+        - name: C
+          template: resource-template
+          dependencies: [A, B]
+          arguments:
+            parameters:
+              - name: random_num_in
+                value: "{{tasks.B.outputs.parameters.random_num_out}}"      # we use the random number from the script template as an input parameter
+        - name: D
+          template: delay-template
+          dependencies: [A, B, C]
+# - name: steps-template # Defining the "steps template" as a Template Invocator, You must use one of "dag" or "steps" as a template invocator
+#   steps:
+#   - - name: step1
+#       template: container-template
+#   - - name: step2a
+#       template: script-template
+#     - name: step2b
+#       template: resource-template
+#   - - name: step3
+#       template: delay-template
+
+
+  - name: container-template                            # Defining the "container template" as a Template Definition
+    container:
+      image: alpine
+      command: ["/bin/sh", "-c"]
+      args: ["echo hello from container template"]
+  - name: script-template                              # Defining the "script template" as a Template Definition
+    script:
+      image: python:alpine3.6
+      command: [python]     # we are using python to generate a random number with script as save it in a file that we use in the resource template
+      source: |
+        import random
+        i = random.randint(1, 100)
+        with open('/tmp/rand-num.txt', 'w') as f:
+            f.write(str(i))
+        # print(i)
+    outputs:
+      parameters:
+        - name: random_num_out
+        # value: "20"                         # we can set a specific value here
+          valueFrom:                          # we can also set the value from a file
+            path: /tmp/rand-num.txt           # file path - the file we created with the python script
+  - name: resource-template                   # Defining the "resource template" as a Template Definition
+    inputs:
+      parameters:
+        - name: random_num_in                 # we use the random number from the script template as an input parameter
+    resource:
+      action: create                          # Defining the "create" action
+      manifest: |                             # Defining the "manifest" from configmap
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          generateName: argo-wf-resource-template-cm-
+        data:
+          created_by: argo-workflows
+          random_number_from_script_template: "{{inputs.parameters.random_num_in}}"
+  - name: delay-template                             # Defining the "delay template" as a Template Definition
+    suspend:
+      duration: "20s"
+-------------------------------------------------
+
+Submit the template with spceified message paramater 
+	terminal --> argo submit workflow-output-parameters.yaml
+
+	# result:
+	Name:                argo-wf-bjzkc
+	Namespace:           workflows
+	ServiceAccount:      unset (will run with the default ServiceAccount)
+	Status:              Pending
+	Created:             Sun Jan 11 13:27:22 +0200 (now)
+	Progress:
+
+Confirm workflow submission
+	terminal --> k get wf
+
+	# result:
+	NAME            STATUS    AGE   MESSAGE
+	rgo-wf-bjzkc   Running    66s
+
+Check the workflow execution on https://argo-workflows.localhost:32074/workflows/workflows/argo-wf-bjzkc
+
+We can access every step INPUTS/OUTPUTS in the step details. 
+	We can check that setp B has an output parameter:	random_num_out	3
+	We can check that setp C has the same input parameter:	random_num_out	3
+
+This mean that step C (resource-template) has created the configured configmap. 
+Confirm the configmap creation
+	terminal --> k get cm
+
+	# result:
+	NAME                                 DATA   AGE
+	argo-wf-resource-template-cm-2wtl8   2      4m28s
+
+Print configmap details and confirm the saved value
+	terminal --> k describe cm argo-wf-resource-template-cm-2wtl8
+	or	
+	terminal --> k get cm argo-wf-resource-template-cm-2wtl8 -o yaml
+
+# result:
+-------------------------------------------------
+Name:         argo-wf-resource-template-cm-2wtl8
+Namespace:    workflows
+Labels:       <none>
+Annotations:  <none>
+
+Data
+====
+created_by:
+----
+argo-workflows
+
+random_number_from_script_template:		# the configuration we set in the resource-template
+----
+3						# the value of the input parameter (the output of the script-template)
+
+
+BinaryData
+====
+
+Events:  <none>
+-------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+Workflow Templates and Cluster Workflow Templates
+=================================================
+
+
+
+WORKFLOW TEMPLATE
+-----------------
+
+Workflow is a CRD - Custom Resource Definition
+
+We create a workflow template and reuse it multiple times in different workflows preventing creation of the same manifest (duplicate).
+
+
+We will go true 	
+	- basic template references
+	- template references with input and output arguments with 3 cases:
+		CASE 1 - inputs params configured in the referred workflow template
+		CASE 2 - imputs configured in the main workflow as step/task params
+		CASE 3 - inputs configured in the main workflow as global variable
+	- cluster workflow definition
+
+If we want to limit workflow template to a specific namespace we have to use workflow template. 
+If we want to use workflow template across the cluster we need to cluster workflow template.
+
+
+basic template references
+-------------------------
+
+In the project folder we have subfolder called template-references with resoures as follow:
+	- workflow-basic-template.yaml - this is the basic workflow template using single template definition (container-template)
+	- workflow-with-reference.yaml - workflow using workflow template reference
+
+
+In workflow-basic-template.yaml we use single container-template. 
+
+workflow-basic-template.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate                  # type
+metadata:
+  name: argo-wf-template                # workflow name
+spec:
+  templates:                            # list of templates
+    - name: container-template          # template name
+      container:
+        image: alpine                   # container image
+        command: ["/bin/sh", "-c"]
+        args: ["echo hello from workflow-template"]
+-------------------------------------------------
+
+Create the basic workflow template
+	terminal --> argo template create workflow-basic-template.yaml
+
+	# result:
+	Name:                argo-wf-template
+	Namespace:           workflows
+	Created:             Mon Jan 12 15:39:28 +0200 (now)
+
+List the templates to confir creation
+	terminal --> argo template list
+
+	# result:
+	NAME
+	argo-wf-template
+
+
+
+In workflow-with-reference.yaml we removed container-template and we will use workflow-basic-template.yaml (which contains container-template) as a reference instead. This mean that if in the referenced workflow-basic-template.yaml we have more than one template definition, we can use them too.
+
+workflow-with-reference.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-wf-                      # auto generate name suffixed with random string
+spec:
+  entrypoint: dag-template
+  templates:
+  - name: dag-template
+    dag:
+      tasks:
+        - name: A
+          templateRef:                        # we are using template definition reference
+            name: argo-wf-template            # name of the template we are referring
+            template: container-template      # name of the template we are referring
+        - name: B
+          template: script-template
+          dependencies: [A]
+        - name: C
+          template: resource-template
+          dependencies: [A]
+        - name: D
+          template: suspend-template
+          dependencies: [B, C]
+  - name: script-template
+    script:
+      image: python:alpine3.6
+      command: [python]
+      source: |
+        import random
+        i = random.randint(1, 10)
+        print(i)
+  - name: resource-template
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          generateName: argo-wf-resource-template-cm-
+        data:
+          created_by: argo-wrkflows
+  - name: suspend-template
+    suspend:
+      duration: "20s"
+-------------------------------------------------
+
+Submit workflow template with reference
+	terminal --> argo submit workflow-with-reference.yaml
+
+	# result:
+	Name:                argo-wf-wh4rx
+	Namespace:           workflows
+	ServiceAccount:      unset (will run with the default ServiceAccount)
+	Status:              Pending
+	Created:             Mon Jan 12 15:41:32 +0200 (now)
+	Progress:
+
+
+Check the submiteed workflow on https://argo-workflows.localhost:32074/workflows/workflows/
+
+We can see that the workflow is successfull as using the created referenced workflow template. In the logs of Task A we can see the message 'hello from workflow-template' from the referenced wworkflow template.
+
+
+Delete the previus template for the next example
+	List the templates to confir creation
+		terminal --> argo template list
+
+		# result:
+		NAME
+		argo-wf-template
+
+	Delete the template
+		terminal --> argo template delete argo-wf-template
+
+		# result: WorkflowTemplate 'argo-wf-template' deleted
+
+
+
+
+
+
+
+input parameters in the reference templtate
+-------------------------------------------
+
+We have 3 cases
+	CASE 1 - inputs params configured in the referred workflow template
+	CASE 2 - imputs configured in the main workflow as step/task params
+	CASE 3 - inputs configured in the main workflow as global variable
+
+In our project we have folder input-output-parameters with the resources:
+	- workflow-template-with-input-params.yaml
+	- workflow-with-reference.yaml
+
+
+
+CASE 1 - Inputs configured in the referred
+
+workflow-template-with-input-params.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate                  # type
+metadata:
+  name: argo-wf-template                # workflow name
+spec:
+  templates:                            # list of templates
+    - name: container-template          # template name
+      inputs:
+        parameters:
+          - name: message
+            value: "hello from workflow template inputs.parameters.message"
+      container:
+        image: alpine
+        command: ["/bin/sh", "-c"]
+        args: ["echo {{inputs.parameters.message}}"]         # use the message in the inputs section
+-------------------------------------------------
+
+Create the template wit h input parameters
+	terminal --> argo template create workflow-template-with-input-params.yaml
+
+	# result:
+	Name:                argo-wf-template
+	amespace:           workflows
+	reated:             Mon Jan 12 15:57:42 +0200 (now)
+
+
+We will use the same workflow as in the last example.
+
+workflow-with-reference.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-wf-                      # auto generate name suffixed with random string
+spec:
+  entrypoint: dag-template
+  templates:
+  - name: dag-template
+    dag:
+      tasks:
+        - name: A
+          templateRef:                        # we are using template definition reference
+            name: argo-wf-template            # name of the template we are referring
+            template: container-template      # name of the template we are referring
+        - name: B
+          template: script-template
+          dependencies: [A]
+        - name: C
+          template: resource-template
+          dependencies: [A]
+        - name: D
+          template: suspend-template
+          dependencies: [B, C]
+  - name: script-template
+    script:
+      image: python:alpine3.6
+      command: [python]
+      source: |
+        import random
+        i = random.randint(1, 10)
+        print(i)
+  - name: resource-template
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          generateName: argo-wf-resource-template-cm-
+        data:
+          created_by: argo-wrkflows
+  - name: suspend-template
+    suspend:
+      duration: "20s"
+-------------------------------------------------
+
+Submit workflow template with reference again
+	terminal --> argo submit workflow-with-reference.yaml
+
+	# result:
+	Name:                argo-wf-9q94x
+	Namespace:           workflows
+	ServiceAccount:      unset (will run with the default ServiceAccount)
+	Status:              Pending
+	Created:             Mon Jan 12 16:01:01 +0200 (now)
+	Progress:
+
+
+Check the submiteed workflow on https://argo-workflows.localhost:32074/workflows/workflows/
+
+We can see that the workflow is successfull as using the created referenced workflow template. In the logs of Task A we can see the message 'hello from workflow template inputs.parameters.message' from the referenced wworkflow template.
+
+Delete the previus template for the next example
+	List the templates to confir creation
+		terminal --> argo template list
+
+		# result:
+		NAME
+		argo-wf-template
+
+	Delete the template
+		terminal --> argo template delete argo-wf-template
+
+		# result: WorkflowTemplate 'argo-wf-template' deleted
+
+
+
+
+CASE 2 - imputs configured in the main workflow as step/task params
+
+We can define the input parameter in the main workflow instead of the referenced one. The parameter is still configured in the referenced workflow template but the value is taken from the main workflow step/task A configuration.
+
+Now the resources are as follow
+
+workflow-template-with-input-params.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate                  # type
+metadata:
+  name: argo-wf-template                # workflow name
+spec:
+  templates:                            # list of templates
+    - name: container-template          # template name
+      inputs:
+        parameters:
+          - name: message
+            # value: "hello from workflow template inputs.parameters.message"
+      container:
+        image: alpine
+        command: ["/bin/sh", "-c"]
+        args: ["echo {{inputs.parameters.message}}"]         # use the message in the inputs section
+-------------------------------------------------
+
+Create the template with the new configs
+	terminal --> argo template create workflow-template-with-input-params.yaml
+
+	# result:
+	Name:                argo-wf-template
+	Namespace:           workflows
+	Created:             Mon Jan 12 16:11:20 +0200 (now)
+
+
+
+workflow-with-reference.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-wf-                      # auto generate name suffixed with random string
+spec:
+  entrypoint: dag-template
+  templates:
+  - name: dag-template
+    dag:
+      tasks:
+        - name: A
+          templateRef:                        # we are using template definition reference
+            name: argo-wf-template            # name of the template we are referring
+            template: container-template      # name of the template we are referring
+          arguments:                          # set input parameters
+            parameters:
+              - name: message                 # parameter name
+                value: "hello from workflow.spec.templates.dag.tasks.A" # parameter value
+        - name: B
+          template: script-template
+          dependencies: [A]
+        - name: C
+          template: resource-template
+          dependencies: [A]
+        - name: D
+          template: suspend-template
+          dependencies: [B, C]
+  - name: script-template
+    script:
+      image: python:alpine3.6
+      command: [python]
+      source: |
+        import random
+        i = random.randint(1, 10)
+        print(i)
+  - name: resource-template
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          generateName: argo-wf-resource-template-cm-
+        data:
+          created_by: argo-wrkflows
+  - name: suspend-template
+    suspend:
+      duration: "20s"
+-------------------------------------------------
+
+Submit workflow template with reference again
+	terminal --> argo submit workflow-with-reference.yaml
+
+	# result:
+	Name:                argo-wf-gkfdw
+	Namespace:           workflows
+	ServiceAccount:      unset (will run with the default ServiceAccount)
+	Status:              Pending
+	Created:             Mon Jan 12 16:11:43 +0200 (now)
+	Progress:
+
+
+Check the submiteed workflow on https://argo-workflows.localhost:32074/workflows/workflows/
+
+We can see that the workflow is successfull as using the created referenced workflow template. In the logs of Task A we can see the message 'hello from workflow.spec.templates.dag.tasks.A' from the referenced wworkflow template.
+
+Delete the previus template for the next example
+	List the templates to confir creation
+		terminal --> argo template list
+
+		# result:
+		NAME
+		argo-wf-template
+
+	Delete the template
+		terminal --> argo template delete argo-wf-template
+
+		# result: WorkflowTemplate 'argo-wf-template' deleted
+
+
+
+
+CASE 3 - inputs configured in the main workflow as global variable
+
+We can define the input parameter in the main workflow instead of the referenced one. The parameter is still configured in the referenced workflow template but the value is taken from the main workflow spec configuration.
+
+Now the resources are as follow
+
+workflow-template-with-input-params.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate                  # type
+metadata:
+  name: argo-wf-template                # workflow name
+spec:
+  templates:                            # list of templates
+    - name: container-template          # template name
+      # inputs:
+      #   parameters:
+      #     - name: message
+            # value: "hello from workflow template inputs.parameters.message"
+      container:
+        image: alpine
+        command: ["/bin/sh", "-c"]
+        # args: ["echo {{inputs.parameters.message}}"]         # use the message in the inputs section
+        args: ["echo {{workflow.parameters.message}}"]         # use the message in the main workflow spec section
+-------------------------------------------------
+
+Create the template with the new configs
+	terminal --> argo template create workflow-template-with-input-params.yaml
+
+	# result:
+	Name:                argo-wf-template
+	Namespace:           workflows
+	Created:             Mon Jan 12 16:27:50 +0200 (now)
+
+
+
+workflow-with-reference.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-wf-                      # auto generate name suffixed with random string
+spec:
+  arguments:
+    parameters:
+      - name: message
+        value: "hello from workflow.spec.arguments.parameters"
+  entrypoint: dag-template
+  templates:
+  - name: dag-template
+    dag:
+      tasks:
+        - name: A
+          templateRef:                        # we are using template definition reference
+            name: argo-wf-template            # name of the template we are refering
+            template: container-template      # name of the template we are refering
+          # arguments:                          # set input parameters
+            # parameters:
+            #   - name: message                 # parameter name
+            #     value: "hello from workflow.spec.templates.dag.tasks.A" # parameter value
+        - name: B
+          template: script-template
+          dependencies: [A]
+        - name: C
+          template: resource-template
+          dependencies: [A]
+        - name: D
+          template: suspend-template
+          dependencies: [B, C]
+  - name: script-template
+    script:
+      image: python:alpine3.6
+      command: [python]
+      source: |
+        import random
+        i = random.randint(1, 10)
+        print(i)
+  - name: resource-template
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          generateName: argo-wf-resource-template-cm-
+        data:
+          created_by: argo-wrkflows
+  - name: suspend-template
+    suspend:
+      duration: "20s"
+-------------------------------------------------
+
+Submit workflow template with reference again
+	terminal --> argo submit workflow-with-reference.yaml
+
+	# result:
+	Name:                argo-wf-v8fpl
+	Namespace:           workflows
+	ServiceAccount:      unset (will run with the default ServiceAccount)
+	Status:              Pending
+	Created:             Mon Jan 12 16:28:08 +0200 (now)
+	Progress:
+	Parameters:
+	  message:           hello from workflow.spec.arguments.parameters
+
+
+Check the submiteed workflow on https://argo-workflows.localhost:32074/workflows/workflows/
+
+We can see that the workflow is successfull as using the created referenced workflow template. In the logs of Task A we can see the message 'hello from workflow.spec.arguments.parameters' from the referenced wworkflow template.
+
+Delete the previus template for the next example
+	List the templates to confir creation
+		terminal --> argo template list
+
+		# result:
+		NAME
+		argo-wf-template
+
+	Delete the template
+		terminal --> argo template delete argo-wf-template
+
+		# result: WorkflowTemplate 'argo-wf-template' deleted
+
+
+
+
+
+cluster workflow definition
+---------------------------
+
+If we want to limit workflow template to a specific namespace we have to use workflow template. 
+If we want to use workflow template across the cluster we need to cluster workflow template.
+
+We will use resources
+	- cluster-workflow-template.yaml
+	- workflow-with-reference.yaml
+
+cluster-workflow-template.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: argo-cluster-wf-template
+spec:
+  templates:
+    - name: container-template
+      # inputs:
+      #   parameters:
+      #     - name: message
+            # value: "hello from workflow template inputs.parameters.message"
+      container:
+        image: alpine
+        command: ["/bin/sh", "-c"]
+        # args: ["echo {{inputs.parameters.message}}"]         # use the message in the inputs section
+        args: ["echo {{workflow.parameters.message}}"]         # use the message in the main workflow spec section
+-------------------------------------------------
+
+
+
+When we referring cluster scoped workflow template we need to set this option in the main workflow config:
+
+workflow-with-reference.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-wf-                      # auto generate name suffixed with random string
+spec:
+  arguments:
+    parameters:
+      - name: message
+        value: "hello from workflow.spec.arguments.parameters"
+  entrypoint: dag-template
+  templates:
+  - name: dag-template
+    dag:
+      tasks:
+        - name: A
+          templateRef:                        # we are using template definition reference
+            name: argo-wf-template            # name of the template we are refering
+            template: container-template      # name of the template we are refering
+            clusterScope: true                # it's needed to use <<clusterScope: true>> if your templateRef is a ClusterWorkflowTemplate
+          # arguments:                        # set input parameters
+            # parameters:
+            #   - name: message               # parameter name
+            #     value: "hello from workflow.spec.templates.dag.tasks.A" # parameter value
+        - name: B
+          template: script-template
+          dependencies: [A]
+        - name: C
+          template: resource-template
+          dependencies: [A]
+        - name: D
+          template: suspend-template
+          dependencies: [B, C]
+  - name: script-template
+    script:
+      image: python:alpine3.6
+      command: [python]
+      source: |
+        import random
+        i = random.randint(1, 10)
+        print(i)
+  - name: resource-template
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          generateName: argo-wf-resource-template-cm-
+        data:
+          created_by: argo-wrkflows
+  - name: suspend-template
+    suspend:
+      duration: "20s"
+-------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+Cron Workflows
+==============
+
+CRD (Custom Resource Definition) - executed periodically
+
+In out project we have subfolder named cron-workflows with resources
+	- cron-workflow.yaml
+
+cron-workflow.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow                    # type of CRD
+metadata:
+  generateName: argo-cron-wf-         # auto-generated name with suffix
+spec:
+  schedules: 
+    - "* * * * *"                     # cron expression for scheduling - runs every 1 minute
+  suspend: false                      # false by default. If true cron workflow will not be triggered
+  concurrencyPolicy: "Allow"          # run only one workflow at a time - can be "Allow", "Forbid" or "Replace".
+  # "Replace" will terminate the previous workflow.
+  # "Forbid" weill not allow two workflows to run at the same time, so the second one will wait for the first one to finish
+  startingDeadlineSeconds: 0          # 0 by default - seconds after which the missed workflow will be started after the previous one has finished
+  successfulJobsHistoryLimit: 2       # keep last 2 successful runs (3 by default)
+  failedJobsHistoryLimit: 2           # keep last 2 failed runs (1 by default)
+  workflowSpec:
+    entrypoint: dag-template
+    templates:
+    - name: dag-template
+      dag:
+        tasks:
+          - name: A
+            template: script-template
+          - name: B
+            template: resource-template
+            dependencies: [A]
+          - name: C
+            template: suspend-template
+            dependencies: [A, B]
+    - name: script-template
+      script:
+        image: python:alpine3.6
+        command: [python]
+        source: |
+          import random
+          i = random.randint(1, 10)
+          print(i)
+    - name: resource-template
+      resource:
+        action: create
+        manifest: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            generateName: argo-wf-resource-template-cm-
+          data:
+            created_by: argo-wrkflows
+    - name: suspend-template
+      suspend:
+        duration: "20s"
+-------------------------------------------------
+
+Create the cron workflow
+	terminal --> argo cron create cron-workflow.yaml
+
+	# result:
+	Name:                          argo-cron-wf-n45zh
+	amespace:                     workflows
+	reated:                       Mon Jan 12 17:07:32 +0200 (now)
+	chedules:                     * * * * *
+	uspended:                     false
+	tartingDeadlineSeconds:       0
+	ConcurrencyPolicy:             Allow
+	NextScheduledTime:             Mon Jan 12 17:08:00 +0200 (27 seconds from now) (assumes workflow-controller is in UTC)
+
+
+List cron workflows
+	terminal --> argo cron list
+	
+	# result:
+	NAME                 AGE   LAST RUN   NEXT RUN   SCHEDULES   TIMEZONE   SUSPENDED
+	argo-cron-wf-n45zh   1m    5s         54s        * * * * *              false
+
+
+Check the created cron workflow on https://argo-workflows.localhost:32074/cron-workflows/workflows
+
+In the details we can see when the next cron workflow will start.
+
+We can start this cron workflow manually with '+SUBMIT' button in the workflwo details. If we start the same workflow at the same time they will work in parallel because 'concurrencyPolicy: "Allow"'. 
+
+If we set the polocy to 'concurrencyPolicy: "Replace"' and start manually the cron workflow while it is already working, the working workflow will be terminated with 'fail' status and the manually started one will continue.
+
+If we set the polocy to 'concurrencyPolicy: "Forbid"' and start manually the cron workflow while it is already working, the working workflow will continue and the manually started one will not start.
+
+We will not see more than 2 successfull history workflows because of the flag 'successfulJobsHistoryLimit: 2'
+We will not see more than 2 failed hostory workflows because of the flag 'failedJobsHistoryLimit: 2'
+
+
+List cron workflows
+	terminal --> argo cron list
+
+Delete the cron workflow in the UI (https://argo-workflows.localhost:32074/cron-workflows/workflows) or with CLI
+	terminal --> argo cron delete argo-cron-wf-xxxxx
+
+	# no result
+
+List cron workflows to confirm deletion
+	terminal --> argo cron list
+
+	# no result				# the cron workflow is delted
+
+
+
+
+
+
+
+
+Workflows Artifacts and Configuring MinIO as Artifact Repository
+================================================================
+
+In our project we have all resources in folder called artifacts.
+
+
+Scenarios description
+--------------------- 
+
+SCENARIO 1 - We have a workflow that produce random number and saves it in a file. The number is in artifact (the file that ontains the number). We have a second workflow that reads this file and use the generated number.
+
+SCENARIO 2 - We have to install Docker Compose and kubectl in container. We need to use artifacts (installation binary packages) for this 2 utilities and intall them in my container. For this we need to execute 2 tasks:
+	1st task - Generate the artifacts in a template and use these artifacts in another template
+	2nd task - Getting and installing these (binary packages) files using artifacts
+
+SCENARIO 1 - Generate a random number create an artifact (file) and save the number into it. Then open use the artifact (open the file and read the number) and use the random generated number from it.
+
+
+For this scenarios we need to install MinIO artifacts repository - https://github.com/minio/minio/tree/master/helm/minio
+
+MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+
+INSTALL MINIO WIHT HELM
+-----------------------
+1. Install MinIO helm repository on our PC
+	terminal --> helm repo add minio https://charts.min.io/
+	terminal --> helm repo update
+
+
+2. Install MinIO chart
+	terminal --> helm install argo-artifacts minio/minio --set resources.requests.memory=512Mi --set replicas=1 --set persistence.enabled=false --set mode=standalone --set rootUser=admin --set rootPassword=password123 --set buckets[0].name=my-bucket --set buckets[0].policy=none --set buckets[0].purge=false -n argo
+
+
+3. Create credentials secret in working namespace
+	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n workflows
+
+	# result: secret/my-minio-cred created
+
+4. Set Ingress controller for MinIO to be externally accessed 
+
+minio-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-console-ingress
+  namespace: argo
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: minio.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-artifacts-minio-console
+            port:
+              number: 9001
+-------------------------------------------------
+
+Apply the ingress manifest
+	terminal --> k apply -f minio-ingress.yaml
+
+	# result: ingress.networking.k8s.io/minio-console-ingress created
+
+	
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 minio.localhost'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim etc/hosts
+	- Add '127.0.0.1 minio.localhost'
+	- save changes and exit - escape, :wq!, enter
+
+
+Check MinIO pod
+	terminal --> kubectl get pods -n argo -l release=argo-artifacts
+
+Check MinIO services
+	terminal --> kubectl get svc -n argo -l release=argo-artifacts
+
+Check secret
+	terminal --> kubectl get secret my-minio-cred -n workflows
+
+Check Ingress
+	terminal --> kubectl get ingress minio-console-ingress -n argo
+
+
+ACCESS MINIO
+------------
+Find the secret for account access
+	terminal --> k get secret -n argo
+
+	# result: 
+	NAME                                   TYPE                 DATA   AGE
+	argo-artifacts-minio                   Opaque               2      15m	# target secret
+
+We can print the secret and see the json paths
+	terminal --> k get secret argo-artifacts-minio -n argo -o yaml
+
+Decode the username (rootUser) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootUser}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: admin
+
+Decode the password (rootPassword) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootPassword}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: password123
+
+
+Access the MinIO app on http://minio.localhost:32073/login
+	- admin
+	- password123
+
+We can create bucket if we haven't with the installation command.
+Create a bucket named 'my-bucket'. We will store our artifacts in this bucket.
+
+
+To use artifacts we need to configure MinIO repository to store the artifacts from the working namespace. MinIO repository is configured in minio-artifact-repo-cm.yaml configmap file below.
+
+minio-artifact-repo-cm.yam
+-------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # If you want to use this config map by default, name it "artifact-repositories". Otherwise, you can provide a reference to a
+  # different config map in `artifactRepositoryRef.configMap` in the workflow.
+  name: artifact-repository           # this name is not the default name
+  annotations:
+    # v3.0 and after - if you want to use a specific key, put that key into this annotation.
+    workflows.argoproj.io/default-artifact-repository: minio-artifact-repo
+data:
+  minio-artifact-repo: |
+    s3:
+      bucket: my-bucket
+      endpoint: argo-artifacts-minio.argo:9000
+      insecure: true
+      accessKeySecret:
+        name: my-minio-cred
+        key: access-key 
+      secretKeySecret:
+        name: my-minio-cred
+        key: secret-key
+-------------------------------------------------
+
+Create the configmap into the working namespace
+	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n workflows
+
+	# result: configmap/artifact-repository created
+
+Confirm ConfigMap creation
+	terminal --> kubectl get configmap artifact-repository -n workflows
+
+	# result:
+	NAME                  DATA   AGE
+	artifact-repository   1      104m
+
+
+
+Workflow Artifacts
+------------------
+
+SCENARIO 1 - Generate a random number create an artifact (file) and save the number into it. Then open use the artifact (open the file and read the number) and use the random generated number from it.
+
+We will use workflow called workflow-artiafcts.yaml. We will use script-template definition to geberate the random number and script-template-new definition to read and print the random number.
+
+workflow-artiafcts.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-wf-  # Name of this Workflow is created with suffix "-<random number>"
+spec:
+  artifactRepositoryRef:
+    configMap: artifact-repository 
+    # Defining a specific artifact repository for a workflow. 
+    # If the name of the artifact repository configmap is artifact-repositories (default name)
+    # We can delete this fields - 'artifactRepositoryRef:configMap: artifact-repository'
+  arguments:
+  entrypoint: dag-template       # Defines "dag-template" as the "main" template
+  templates:
+  - name: dag-template           # Defining the "dag template" as a Template Invocator, You must use one of "dag" or "steps" as a template invocator
+    dag:
+      tasks:
+        - name: A
+          template: container-template
+          arguments:
+        - name: B
+          template: script-template          # generate a ranodm number in this step/task and save it into a file
+          dependencies: [A]
+        - name: C
+          template: resource-template        # create a configmap (not connected to this case)
+          dependencies: [A, B]
+        - name: D
+          template: script-template-new      # the new script template that reads the created random number from the file
+          dependencies: [A, B, C]
+          arguments:                         # arguments section as input
+            artifacts:                       # artifacts
+              - name: random_num_in          # name of the artifact (the file with the number)
+                from: "{{tasks.B.outputs.artifacts.random_num_out}}"    # read the number from task B output
+        - name: E                            # delay step/tasks
+          template: delay-template
+          dependencies: [A, B, C, D]
+# - name: steps-template # Defining the "steps template" as a Template Invocator, You must use one of "dag" or "steps" as a template invocator
+#   steps:
+#   - - name: step1
+#       template: container-template
+#   - - name: step2a
+#       template: script-template
+#     - name: step2b
+#       template: resource-template
+#   - - name: step3
+#       template: delay-template
+
+
+  - name: container-template                          # Defining the "container template" as a Template Definition
+    container:
+      image: alpine
+      command: ["/bin/sh", "-c"]
+      args: ["echo hello from container template"]
+  - name: script-template                             # Defining the "script template" as a Template Definition
+    script:
+      image: python:alpine3.6
+      command: [python]            # python script that will generate a ranodm number and save it in a file
+      source: |
+        import random
+        i = random.randint(1, 100)
+        with open('/tmp/rand-num.txt', 'w') as f:
+            f.write(str(i))
+        # print(i)
+    outputs:                       # output
+      artifacts:                   # output type is artifact
+        - name: random_num_out     # name of the artifact
+          path: /tmp/rand-num.txt  # path of the artifact - the number is saved in this file
+  - name: resource-template                           # Defining the "resource template" as a Template Definition
+    resource:
+      action: create
+      manifest: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          generateName: argo-wf-resource-template-cm-
+        data:
+          created_by: argo-workflows
+  - name: script-template-new                         # Defining the "script template new" as a Template Definition
+    inputs:                         # input
+      artifacts:                    # input type is artifact
+        - name: random_num_in       # name of the artifact (file)
+          path: /tmp/rand.txt       # path of the artifact - can be different from the output path in the script-template definition
+    script:
+      image: python:alpine3.6
+      command: [python]    
+      # python script that opens the file and reads the value and print it. 
+      # Tha path of the fle must be the same as the input artifact (in the same script-template-new definition)
+      source: |
+        with open('/tmp/rand.txt', 'r') as f:
+            number = f.read()
+        print(number)
+  - name: delay-template                              # Defining the "delay template" as a Template Definition
+    suspend:
+      duration: "20s"
+-------------------------------------------------
+
+
+Submit the workflow
+	terminal --> argo submit workflow-artiafcts.yaml
+
+	# result:
+	Name:                argo-wf-8rq57
+	Namespace:           workflows
+	ServiceAccount:      unset (will run with the default ServiceAccount)
+	Status:              Pending
+	Created:             Tue Jan 13 15:13:24 +0200 (now)
+	Progress:
+
+
+Access argo workflows UI and check the workflow status - https://argo-workflows.localhost:32074/cron-workflows/workflows
+The workflow will be successfull and artifact will be created in Task B. We can download the artifact and see the generated value.
+
+We can find the artifact also in 'my-bucket' in MinIO Browser - http://minio.localhost:32073/browser
+We can see the the workflow name in the bucket details.
+
+In the workflow task D whould be used the artifact. We can open argo workflows and see the generated number in the logs. In the task D Details page INPUTS/OUTPUTS we can see the inputs filename and download it if we need to. 
+
+
+
+
+
+SCENARIO 2 - We have to install Docker Compose and kubectl in container. We need to use artifacts (installation binary packages) for this 2 utilities and intall them in container. For this we need to execute 2 tasks:
+	1st task - Generate the artifacts in a template and use these artifacts in another template
+	2nd task - Getting and installing these (binary packages) files using artifacts
+
+We will use resources hardwired-artifacts.yaml workflow manifest:
+
+hardwired-artifacts.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: hardwired-artifact-               # Name of this Workflow is created with suffix "-<random number>"
+spec:
+  entrypoint: hardwired-artifact                  # Defines "hardwired-artifact" as the "main" template
+  templates:
+  - name: hardwired-artifact                      # Defining the "hardwired artifact" as a Template Invocator
+    inputs:                                       # Defining the input artifacts
+      artifacts:
+      # Check out the main branch of the argo repo and place it at /devopshobies
+      # revision can be anything that git checkout accepts: branch, commit, tag, etc.
+      - name: argo-source
+        path: /devopshobbies
+        git:
+          repo: https://github.com/entermix123/ArgoCD-Labs        # url to the argocd lab repo
+          revision: "main"                                        # revision of the argocd lab repo, can be branch, commit, tag, etc.
+      # Download docker-compose v2.29.2 and place it at /usr/local/bin/
+      - name: docker-compose                                      # name of the docker-compose artifact
+        path: /usr/local/bin/docker-compose                       # path to the docker-compose binary
+        mode: 0755                                                # mode of the docker-compose binary
+        http:
+          url: https://github.com/docker/compose/releases/download/v2.29.2/docker-compose-linux-x86_64        # url to the docker-compose binary
+    container:
+      image: alpine                               # Alpine is used as the base image
+      command: [sh, -c]                           # Command to run in the container
+      args: ["ls -l /devopshobbies /usr/local/bin/docker-compose"]           # Arguments to the command
+-------------------------------------------------
+
+Submit the workflow into the working namespace
+	terminal --> argo submit hardwired-artifacts.yaml -n workflows
+
+	# result:
+	Name:                hardwired-artifact-h8qbq
+	Namespace:           workflows
+	ServiceAccount:      unset (will run with the default ServiceAccount)
+	Status:              Pending
+	Created:             Tue Jan 13 16:29:08 +0200 (now)
+	Progress:
+
+
+We can check the Argo Workflow UI (https://argo-workflows.localhost:32074/workflows/workflows) and wait until the workflow finish. We can open the task of the last submitted workflow and go to Details/Logs.
+
+We can see the actions performed:
+1. - Docekr Compose binary is downloaded in the '/usr/local/bin/docker-compose' folder
+2. - repository is cloned in '/devopshobbies' folder
+
+-------------------------------------------------
+-rwxr-xr-x    1 root     root      63173250 Jan 13 14:29 /usr/local/bin/docker-compose
+/devopshobbies:
+total 56
+drwxr-xr-x    3 root     root          4096 Jan 13 14:29 00-Install Guide
+drwxr-xr-x    4 root     root          4096 Jan 13 14:29 04-argocd-projects
+drwxr-xr-x    4 root     root          4096 Jan 13 14:29 05-argocd-private-repositories
+drwxr-xr-x    5 root     root          4096 Jan 13 14:29 06-argocd-sync-policies-options
+drwxr-xr-x    5 root     root          4096 Jan 13 14:29 07-argocd-sync-phases-waves
+drwxr-xr-x    4 root     root          4096 Jan 13 14:29 08-argocd-add-cluster
+drwxr-xr-x    5 root     root          4096 Jan 13 14:29 09-argocd-applicationSet-1
+drwxr-xr-x    4 root     root          4096 Jan 13 14:29 10-argocd-applicationSet-2
+drwxr-xr-x    2 root     root          4096 Jan 13 14:29 11-argo-rollouts-installation
+drwxr-xr-x    4 root     root          4096 Jan 13 14:29 12-argo-rollouts-blue-green
+drwxr-xr-x    2 root     root          4096 Jan 13 14:29 13-argo-rollouts-canary
+drwxr-xr-x    4 root     root          4096 Jan 13 14:29 14-argo-rollouts-analysis
+drwxr-xr-x    4 root     root          4096 Jan 13 14:29 15-argo-workflows-getting-started
+drwxr-xr-x    5 root     root          4096 Jan 13 14:29 argocd-application
+time="2026-01-13T14:29:20 UTC" level=info msg="sub-process exited" argo=true error="<nil>"
+-------------------------------------------------
+
+We have copied the repository in the /devopshobbies folder
+
+
+Delete the workflow
+-------------------
+
+We can delete the workflow from the Argo workflow UI or with CLI
+	List the workflows
+		terminal --> k get workflows
+
+		# result: 
+		hardwired-artifact-h8qbq   Succeeded   17m	# target
+
+	Delete the workflow
+		terminal --> k delete workflow hardwired-artifact-h8qbq
+
+		# result: workflow.argoproj.io "hardwired-artifact-h8qbq" deleted from workflows namespace
+
+
+
+
+
+We have 2 more resources
+	- conditional-parameters.yaml
+	- conditional-artifacts.yaml
+
+
+We are using conditional parameter with head and tails on flip coin scenario.
+
+Conditional parameters provide a way to choose the output parameters based on expression. In this example DAG template has two task which will run conditionally based on `when`. Based on this condition one of task may not execute. The template's output parameter will be set to the executed taks's output result.
+
+conditional-parameters.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: dag-conditional-parameter-
+  labels:
+    workflows.argoproj.io/test: "true"
+  annotations:
+    workflows.argoproj.io/description: |
+      Conditional parameters provide a way to choose the output parameters based on expression.
+
+      In this example DAG template has two task which will run conditionally based on `when`.
+
+      Based on this condition one of task may not execute. The template's output parameter will be set to the
+      executed taks's output result.
+    workflows.argoproj.io/version: '>= 3.1.0'
+spec:
+  entrypoint: main
+  templates:
+    - name: main
+      dag:
+        tasks:
+          - name: flip-coin                         # this is the entrypoint task
+            template: flip-coin                     # this is the template to run
+          - name: heads                             # name of the task
+            depends: flip-coin                      # this task depends on the entrypoint task
+            template: heads                         # this is the template to run if the condition below is met
+            when: "{{tasks.flip-coin.outputs.result}} == heads"      # this is the condition configured with 'when'
+          - name: tails                             # name of the task
+            depends: flip-coin                      # this task depends on the entrypoint task
+            template: tails                         # this is the template to run if the condition below is met
+            when: "{{tasks.flip-coin.outputs.result}} == tails"      # this is the condition configured with 'when'
+      outputs:                        # dag template output
+        parameters:
+          - name: stepresult          # name of the output parameter
+            valueFrom:
+              expression: "tasks['flip-coin'].outputs.result == 'heads' ? tasks.heads.outputs.result : tasks.tails.outputs.result"
+              # teh result of the expression will be set to the output parameter
+    
+    - name: flip-coin
+      script:
+        image: python:alpine3.6
+        command: [python]     # python script that will generate heads if generated number is 0 or tails if generated number is 1
+        source: |
+          import random
+          print("heads" if random.randint(0,1) == 0 else "tails")
+    
+    - name: heads
+      script:
+        image: python:alpine3.6
+        command: [python]               # python script that will print heads if condition result is 0
+        source: |
+          print("heads")
+    
+    - name: tails                     
+      script:
+        image: python:alpine3.6
+        command: [python]               # python script that will print tails if condition result is 1
+        source: |
+          print("tails")
+-------------------------------------------------
+
+
+
+
+In this case we are using the same flip coin scenario but with steps instead of tasks (dag invoker)
+
+conditional-artifacts.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: conditional-artifacts-
+  labels:
+    workflows.argoproj.io/test: "true"
+  annotations:
+    workflows.argoproj.io/description: |
+      Conditional artifacts provide a way to choose the output artifacts based on expression.
+
+      In this example the main template has two steps which will run conditionall using `when` .
+
+      Based on the `when` condition one of step will not execute. The main template's output artifact named "result"
+      will be set to the executed step's output.
+    workflows.argoproj.io/version: '>= 3.1.0'
+spec:
+  artifactRepositoryRef:
+    configMap: artifact-repository 
+    # Defining a specific artifact repository for a workflow. there is no need to specify the name of the artifact repository configmap unless
+    # its name is artifact-repositories
+  entrypoint: main
+  templates:
+    - name: main
+      steps:
+        - - name: flip-coin                   # this is the entrypoint step
+            template: flip-coin               # this is the template to run
+        - - name: heads                       # name of the second step
+            template: heads                   # this is the template to run if the condition below is met
+            when: "{{steps.flip-coin.outputs.result}} == heads"        # this is the condition configured with 'when'
+          - name: tails                       # name of the third step
+            template: tails                   # this is the template to run if the condition below is met
+            when: "{{steps.flip-coin.outputs.result}} == tails"        # this is the condition configured with 'when'
+      outputs:                 # invoker template output
+        artifacts:             # invoker output is an artifact
+          - name: result       # name of the output artifact
+            fromExpression: "steps['flip-coin'].outputs.result == 'heads' ? steps.heads.outputs.artifacts.result : steps.tails.outputs.artifacts.result"
+            # the result of the expression will be set to the output artifact
+
+    - name: flip-coin                  # this is the first step
+      script:
+        image: python:alpine3.6
+        command: [ python ]            # python script that will generate heads if generated number is 0 or tails if generated number is 1
+        source: |
+          import random
+          print("heads" if random.randint(0,1) == 0 else "tails")
+
+    - name: heads                      # this is the second step 
+      script:
+        image: python:alpine3.6
+        command: [ python ]            # python script that will save text in file (artifact) if condition result is 0
+        source: |
+          with open("result.txt", "w") as f:
+            f.write("it was heads")
+      outputs:                         # step output
+        artifacts:                     # step output is an artifact
+          - name: result               # name of the output artifact
+            path: /result.txt          # path of the output artifact
+
+    - name: tails                      # this is the third step
+      script:
+        image: python:alpine3.6
+        command: [ python ]            # python script that will save text in file (artifact) if condition result is 1
+        source: |
+          with open("result.txt", "w") as f:
+            f.write("it was tails")
+      outputs:                         # step output
+        artifacts:                     # step output is an artifact
+          - name: result               # name of the output artifact
+            path: /result.txt          # path of the output artifact
+-------------------------------------------------
+
+
+
+
+
+
+
