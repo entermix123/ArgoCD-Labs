@@ -1,0 +1,650 @@
+Video link - https://www.youtube.com/watch?v=nXx-Y3Vbn_0&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=7
+
+Video Agenda:
+
+00:00 Sync Phases Overview
+00:07:20 Sync Phases In Practice
+00:41:55 Hook Deletion Policies Overview
+00:46:25 Hook Deletion Policies In Practice
+00:54:00 Sync Phases Overview
+00:59:45 Sync Phases In Practice
+01:06:36 precedence in the resources by kind and name
+
+Video Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Notes Lab repo - https://github.com/entermix123/ArgoCD-Labs
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+
+
+
+Sync Phases Overview
+====================
+
+ArgoCD executes and deploys all the resources in the Kubernete cluster based on priorities. We have multiple priorities in ArgoCD to deploy the resources and rgoCD examine all of them by order. 
+
+Priorities:
+	- Sync Phases - ArgoCD executes "SYNC" operation in a number of steps. In a higher level there are 3 phases.
+		1st. pre-sync		
+		2nd. sync
+		3rd. post-sync
+		4th. sync fail
+		- All resources are in the Sync phase by default. 
+		- We can change ArgoCD's default behavior and can place a resources into another phase.
+
+1. Pre-Sync - We want to perform a database schema migration, check the health of the application before deploying a new version of the application. So we define a job and place it in pre-sync phase to execute before sync phase. ArgoCD will run the pre-phase first and once pre-sync complete and all the resources in that phase become healthy, hte sync phase will run and the resources will be deployed in the cluster. 
+
+2. Sync Phase - We have resources like service, serviceaccount and deployment to deploy.
+
+3. Post Sync - We send a notification to a chatOps service like Slack or Mattermost, etc. to enform users that the result of the last sync was OK. We create a Notification JOB that is going to run after the sync phase complete and all resources becom healthy. If Sync phase fails, post-sync phase will NOT run !
+
+4. Sync-fail - This phase can be used as Notification JOB phase to send status to Chats (like Slack/Mattermost)
+
+Wow we define the resource's phase?
+We can define the phases of the resource by using argocd hooks configured as Kubernetes annotations. If we want to place a resource into specific phase phase we use Kubernetes annotations called "argocd koods".
+
+
+
+1st. pre-sync			2nd. sync		3rd. post-sync				4th. sync-fail
+		
+JOBS				SVC			Notification JOB with status   		Notification JOB with status
+				SA			only if sync phase succeed		only if sync phase fails
+				DEPLOY
+
+
+
+Sync Phases In Practice
+=======================
+
+We have two folders with files
+	1. sync-phases-waves-manifests-examples
+		- deployment.yaml
+		- fail-job.yaml
+		- post-job.yaml
+		- pre-job.yaml
+		- sevice.yaml
+		- serviceaccount.yaml
+
+In deployment.yaml we have no annotations. This means that this resource will be ran in the SYNC phase by default. By default all resources are ran in sync phase.
+
+We will set job in the pre-sync phase and if the app is healthy we can deploy our new application. After deployment (if successfull) we send a notification to chatOps (Mattermost) to notify all users of the sync result. If the sync operation fails we set a post-job to inform users for the failure.
+
+
+We need to start a mattermost server on our local PC with Docker so the pre-job can connect with. 
+Start Docker and start a container of local mattermost:
+	terminal --> docker run --name mattermost -d -p 8065:8065 -e MM_SQLSETTINGS_DRIVERNAME=postgres -e MM_SQLSETTINGS_DATASOURCE="postgres://mmuser:mostest@localhost:5432/mattermost_test?sslmode=disable&connect_timeout=10" mattermost/mattermost-preview
+
+
+Create custom mattermost image
+------------------------------
+
+We need a Docker image of mattermost not for a local use but for the pre-job and fail-job to run with as a message sender.
+
+1. Go to "07-argocd-sync-phases-waves\python_mattermost_api" and build Docker image
+	terminal --> docker build -t mattermost-notifier:v1 .
+
+2. Load into Kind cluster
+	terminal --> kind load docker-image mattermost-notifier:v1
+
+3, Check if the image is loaded in Kind cluster
+	terminal --> docker exec -it kind-control-plane crictl images | findstr mattermost-notifier
+
+
+
+Configure resources
+-------------------
+
+Pre-JOB:
+
+Login to mostmatter on http://localhost:8065/register
+	- Email: sysadmin@mailcom
+	- Username: sysadmin
+	- Pass: Sys@dmin-sample1
+	- Organization name: ArgoCDORG				# also used for team name
+	- Skip, Finish
+	- Create "ArgoCD Test Phases" channel
+
+	- Generate Personal Access Token
+		- Enable Personall Access Tokens
+			- Setting/System Console/Integration Management/Enable Personal Access Tokens: True
+		-Generate personal Access Token
+			- Profile/Security/Personal Access Token/Create Token
+				- Token Description: argocd_test_token
+				- Save
+				- Copy the token
+
+
+Configure JOBS
+--------------
+
+Pre-job - this job is executed in the PreSync phase and checks if mattermost local server is running as a prerequisite and allow SYNC phases to start.
+
+pre-job.yaml
+-----------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: health-check-pre-job
+  annotations:                                                # set annotation section
+    argocd.argoproj.io/hook: PreSync                          # hook for preSync phase
+    # argocd.argoproj.io/hook-delete-policy: HookFailed        # added HookFailed policy - after fail deletion
+spec:
+  template:
+    spec:
+      containers:
+        - name: health-check
+          image: curlimages/curl
+          command: ["/bin/sh", "-c"]
+          args: ["if curl -s -o /dev/null -w '%{http_code}' http://host.docker.internal:8065 | grep -q 200; then echo 'Mattermost is up and Running'; exit 0; else echo 'Mattermost is NOT accessible'; exit 1; fi"]
+      restartPolicy: Never
+  backoffLimit: 0
+-----------------------------------------------
+
+
+
+deployment - We run the deployment in sync phase so we do not set any annotations.
+service - in Sync phase
+serviceaccount - in Sync phase
+
+
+
+Post-Job - This JOB will be executed in PostSync phase if Sync phase is successful.
+
+post-job.yaml
+-----------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mattermost-post-job-success
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  template:
+    spec:
+      containers:
+        - name: mattermost-success
+          image: mattermost-notifier:v1           # ✅ Changed to your custom image
+          imagePullPolicy: Never                   # ✅ Added - uses local image
+          command: ["python3", "mattermost_api.py"]
+          env:
+          - name: message
+            value: "MESSAGE FROM ARGOCD: The last sync is: ✅ Sync OK"
+          - name: url
+            value: "host.docker.internal"          # ✅ Changed from localhost
+          - name: token
+            value: "ot3edzrgw7yrzxtoaxpi7hu4dw"
+          - name: scheme
+            value: "http"
+          - name: port
+            value: "8065"
+          - name: channel_name
+            value: "argocd-test-phases"
+          - name: team_name
+            value: "argocdorg"
+      restartPolicy: Never
+  backoffLimit: 0
+-----------------------------------------------
+
+
+
+
+fail-job - This job is executed in Sync-Fail Phase only if Sync phase is failed.
+
+fail-job.yaml
+-----------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mattermost-post-job-failure
+  annotations:
+    argocd.argoproj.io/hook: SyncFail
+spec:
+  template:
+    spec:
+      containers:
+        - name: mattermost-failure
+          image: mattermost-notifier:v1
+          imagePullPolicy: Never
+          command: [ "python3", "mattermost_api.py"]
+          env:
+          - name: message
+            value: "MESSAGE FROM ARGOCD: The last sync is: ❌ Sync Failed"
+          - name: url
+            value: "host.docker.internal"
+          - name: token
+            value: "ot3edzrgw7yrzxtoaxpi7hu4dw"
+          - name: scheme
+            value: "http"
+          - name: port
+            value: "8065"
+          - name: channel_name
+            value: "argocd-test-phases"
+          - name: team_name
+            value: "argocdorg"
+      restartPolicy: Never
+  backoffLimit: 0
+-----------------------------------------------
+
+
+
+
+
+Create n application maifest called app-sync-phase-1.yaml
+
+app-sync-phase-1.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: app-sync-phase-1            			      # change name
+spec:
+  destination:
+    namespace: app-sync-phases					        # change namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: 07-argocd-sync-phases-waves/sync-phases-waves-manifests-examples
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    syncOptions:							# add sync options section
+    - CreateNamespace=true						# enable CreateNamespace parameter
+    # automated: {}                   # disable automated sync
+-----------------------------------------------
+
+
+Create the application
+	terminal --> k apply- f app-sync-phase-1.yaml
+
+	# result: application.argoproj.io/app-sync-phase-1 created
+
+The application should sync successfully and we should get message in mattermost application.
+
+
+
+Fail-Sync phase
+---------------
+
+
+Scenario 1:
+
+We want to fail pre-sync phase and trigger the fail-job.
+
+Change the port of the connection in pre-job from "http://host.docker.internal:8065" to "http://host.docker.internal:9999"
+
+Push the changes to the repo and sunc the app in ArgoCD UI. Fail-job now should trigger and we should receive failure message in the mattermost application.
+
+Revert the changes - set the correct port "http://host.docker.internal:8065" in pre-sync job and push the changes to git.
+
+
+Scenarion 2:
+
+Now we want to fail the sync phase and check if the fail-job work properly and send message to mattermost server with status sync failed.
+
+Create a invalid resource called test-failure.yaml
+
+fail-during-sync.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: Pod
+metadata:
+  name: quick-fail-pod
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    resources:
+      limits:
+        memory: "invalid-value"  # ❌ This fails validation immediately during apply
+-----------------------------------------------
+
+Push the resource to the repo sync the application in ArgoCD UI.
+
+After the Sync phase fail, fail-job should be triggered and we should receive the failure message in the mattermost server.
+
+After the test move the invalid resource to different folder and sync the app in ArgoCD UI to have a synced application.
+
+
+
+
+
+
+Hook Deletion Policies Overview
+===============================
+
+List jobs in the namespace we tested the phases
+	terminal --> k get job -n app-sync-phases
+
+	# result:
+	NAME                          STATUS     COMPLETIONS   DURATION   AGE
+	health-check-pre-job          Complete   1/1           4s         23m
+	mattermost-post-job-failure   Complete   1/1           3s         26m
+	mattermost-post-job-success   Complete   1/1           3s         22m
+
+These jobs are called Hook Resources. We can delete this resources (the jobs) with deletion policies.
+
+
+ArgoCD has 3 different types of hook deletion policies (annotations):
+	1. HookSucceeded - the hook resource (the job) is deleted after the hook succeed
+		Example: if the pre-job succeed its getting deleted from the cluster
+
+	2. HookFailed - the hook resource (the job) is deleted after the hook fails
+		Example: if the pre-job fails its getting deleted from the cluster
+	
+	3. BeforeHookCreation - any exsisting hook resources (jobs) are deleted before new one are created.
+		Example: If new pre-job is created, the old one is deleted
+
+The DEFAULT hook policy is BeforeHookCreation !!!
+
+
+
+
+
+Hook Deletion Policies In Practice
+==================================
+
+HookSucceeded Test
+------------------
+
+We want to set new deletion policies for our jobs.
+
+In the pre-job.yaml we set after deletion policy - HookSucceeded.
+
+pre-job.yaml
+-----------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: health-check-pre-job
+  annotations:                                                # set annotation section
+    argocd.argoproj.io/hook: PreSync                          # hook for preSync phase
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded   # added HookSucceeded policy - after success deletion
+spec:
+  template:
+    spec:
+      containers:
+        - name: health-check
+          image: curlimages/curl
+          command: ["/bin/sh", "-c"]
+          args: ["if curl -s -o /dev/null -w '%{http_code}' http://host.docker.internal:8065 | grep -q 200; then echo 'Mattermost is up and Running'; exit 0; else echo 'Mattermost is NOT accessible'; exit 1; fi"]
+      restartPolicy: Never
+  backoffLimit: 0
+-----------------------------------------------
+
+This mean that when this pre-job succeeds it will be deleted from the cluster.
+
+Push the changes to the repository and sync the application in ArgoCD UI.
+
+
+List jobs in the 'app-sync-phases' namespace 
+	terminal --> k get job -n app-sync-phases
+
+	# result:
+	NAME                          STATUS     COMPLETIONS   DURATION   AGE
+	mattermost-post-job-failure   Complete   1/1           3s         45m
+	mattermost-post-job-success   Complete   1/1           3s         109s
+
+We can see that the pre-job is deleted from the cluster after successful execution.
+
+
+HookFailed Test
+---------------
+
+We will set HookFailed deletion policy in the same pre-job
+
+pre-job.yaml
+-----------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: health-check-pre-job
+  annotations:                                                # set annotation section
+    argocd.argoproj.io/hook: PreSync                          # hook for preSync phase
+    argocd.argoproj.io/hook-delete-policy: HookFailed   # added HookFailed policy - after failure deletion
+spec:
+  template:
+    spec:
+      containers:
+        - name: health-check
+          image: curlimages/curl
+          command: ["/bin/sh", "-c"]
+          args: ["if curl -s -o /dev/null -w '%{http_code}' http://host.docker.internal:8065 | grep -q 200; then echo 'Mattermost is up and Running'; exit 0; else echo 'Mattermost is NOT accessible'; exit 1; fi"]
+      restartPolicy: Never
+  backoffLimit: 0
+-----------------------------------------------
+
+Push changes to the repository and sync the app in ArgoCD UI. This will recreate the pre-job in our cluster.
+
+Confirm pre-job recreation
+	terminal --> k get job -n app-sync-phases
+
+	# result:
+	NAME                          STATUS     COMPLETIONS   DURATION   AGE
+	health-check-pre-job          Complete   1/1           5s         47s		# this is the recreated pre-job
+	mattermost-post-job-failure   Complete   1/1           3s         53m
+	mattermost-post-job-success   Complete   1/1           4s         18s
+
+We can to fail the pre-job and check if its get deleted after deletion by changing the connection string from http://host.docker.internal:8065 to http://host.docker.internal:9999 and push changed job to the repo. Sync tha app in ArgoCD UI. The Sync will fail and we will get message in mattermost app.
+
+Confirm pre-job deletion
+	terminal --> k get job -n app-sync-phases
+
+	# result:
+	NAME                          STATUS     COMPLETIONS   DURATION   AGE
+	mattermost-post-job-failure   Complete   1/1           3s         89s
+	mattermost-post-job-success   Complete   1/1           4s         6m10s
+
+Pre-job is deleted from the cluster.
+
+Set the deletion policy as comment to remove its effect, push changes to the repo and sync the app in ArgoCD UI to have a synced application with all jobs.
+
+
+
+
+
+
+Sync Phases Overview
+====================
+
+ArgoCD deployment priorities
+1st. Phases
+2nd. Waves (if in same phase)
+3th. By Kind 
+4th. By Name (if all other priorities equals)
+
+
+Most high (important) priority for deployment of application for ArgoCD are the phases.
+
+PHASES
+------
+
+1. pahse - pre-sync - has one job pre-job. If pre-job is successful sync phase may start.
+2. phase - sync - we deploy the resources service (svc), serviceaccount (sa) and deployment (deploy)
+	- the sync phase is mutual for all resources in this phase
+	!!! Here ArgoCD goes to the next priorities - Waves and Kind
+3. phase - post/fail-sync - these phases depends on the first two (pre-sync and sync)
+
+
+WAVES
+-----
+
+Waves is a number. Waves can be negative, 0 or positive number.
+The DEAFAULT Wave number for all resources is 0 !!! This mean that all resources are deployed randomly. 
+If we want to deploy specific resource before other (for example: svc - service), we need to change this wave number to be lower. 
+The lower Wave number has higher priority !!!
+
+Example: 
+--------
+We want to deploy first service service (svc), account (sa) and then deployment (deploy)
+
+Resource	Wave
+svc		1
+sa		2
+deploy		3
+
+
+
+
+Sync Phases In Practice
+=======================
+
+Create new application called application-waves.yaml
+
+application-waves.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: app-sync-waves-1           			      # change name
+spec:
+  destination:
+    namespace: app-sync-waves					        # change namespace
+    server: https://kubernetes.default.svc
+  project: default
+  source:
+    path: 07-argocd-sync-phases-waves/sync-phases-waves-manifests-examples
+    repoURL: https://github.com/entermix123/ArgoCD-Labs.git
+    targetRevision: main
+  syncPolicy:
+    syncOptions:							# add sync options section
+    - CreateNamespace=true						# enable CreateNamespace parameter
+    # automated: {}                   # disable automated sync
+-----------------------------------------------
+
+Create the application
+	terminal --> k apply -f application-waves.yaml
+	
+	# result: application.argoproj.io/app-sync-waves-1 created
+
+Sync the application in ArgoCD UI.
+
+We can look over the deployment order by clicking on "Sync OK" / RESULT section.
+
+ArgoCD will consider first column "HOOK". This columne contains phase names of each hook. If it is PreSync this resource (job) is executed first. 
+However we can see that on "STATUS: Synced" lines we have no hooks but only resources deployed. This is the "Sync" phase.
+
+
+Change the wave number of specific "SYNC" phase resource
+--------------------------------------------------------
+
+Edit the resources in "07-argocd-sync-phases-waves/sync-phases-waves-manifests-examples" folder and add annotation for wave priority.
+
+service.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"			# added annotation for wave priority
+  labels:
+    helm.sh/chart: nginx-0.1.0
+    app.kubernetes.io/name: nginx
+    app.kubernetes.io/instance: nginx
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: nginx
+    app.kubernetes.io/instance: nginx
+-----------------------------------------------
+
+
+serviceaccount.yaml
+-----------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nginx
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"			# added annotation for wave priority
+  labels:
+    helm.sh/chart: nginx-0.1.0
+    app.kubernetes.io/name: nginx
+    app.kubernetes.io/instance: nginx
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+-----------------------------------------------
+
+The changes we made assure that service will be deployed first and then serviceaccount because -2 is smaller number than -1.
+
+Save changes, push them to the repository and Sync the application in ArgoCD UI. Check the deployment details.
+On each of this lines we have waves number (priority) in the "SYNC WAVE" column. 
+
+
+
+
+
+precedence in the resources by kind and name
+============================================
+
+The third deployment priority for ArgoCD is by Kind of the resource.
+
+Resource Kind Priority Order (Low to High):
+1. Namespaces (always first)
+2. Core Resources:
+
+ResourceQuota
+LimitRange
+Secret
+ConfigMap
+ServiceAccount
+PersistentVolume
+PersistentVolumeClaim
+StorageClass
+
+3. RBAC:
+
+CustomResourceDefinition (CRDs)
+ClusterRole
+ClusterRoleBinding
+Role
+RoleBinding
+
+4. Networking & Services:
+
+Service
+Endpoints
+
+5. Workloads:
+
+DaemonSet
+Pod
+ReplicationController
+ReplicaSet
+Deployment
+StatefulSet
+Job
+CronJob
+
+6. Other:
+
+Ingress
+HorizontalPodAutoscaler
+APIService
+
+7. Custom Resources (last)
+Override This Order:
+Use the argocd.argoproj.io/sync-wave annotation to control exact ordering regardless of Kind.
+
+
+
+
+
+
+
+
+
+
+
+
+
