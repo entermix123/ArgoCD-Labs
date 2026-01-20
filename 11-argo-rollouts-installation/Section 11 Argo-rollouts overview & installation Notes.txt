@@ -1,0 +1,390 @@
+Video link - https://www.youtube.com/watch?v=hgEVcHhBwPw&list=PLYrn63eEqAzYttcyB6On1oH35O5rxgDt4&index=11
+
+Video Agenda:
+
+00:00 Argo-rollouts overview
+00:17:50 Argo-rollouts Installation
+
+Video Lab repo - https://github.com/devopshobbies/argocd-tutorial
+
+Killercoda exercise platform - https://killercoda.com/mabusaa/course/argocd-endusers-scenarios
+
+
+
+Prerequisites
+=============
+
+We should have atleast one running cluster:
+-------------------------------------------
+
+List clusters
+	terminal --> kubectl config get-clusters
+
+	# result: 
+	kind-kind
+	cluster2
+
+List contexts
+	terminal --> kubectl config get-contexts
+
+	# result:
+	CURRENT   NAME            CLUSTER         AUTHINFO        NAMESPACE
+	          kind-cluster2   kind-cluster2   kind-cluster2
+	*         kind-kind       kind-kind       kind-kind       			# current cluster
+
+
+We should have installed Argo Rollouts 
+--------------------------------------
+Section 11. Install Argo Rollouts on main cluster from the installtion guide below
+
+
+We can find prerequisites installation instructions here - https://github.com/entermix123/ArgoCD-Labs/blob/main/00-Install%20Guide/Kubernetes%20Kind%20ArgoCD%20Install%20Guide%20for%20Windows.txt
+
+
+
+Argo Rollouts - The Idea 
+========================
+
+What is Argo-rollouts?
+- kubernetes controller and set-up CRDs which provide advance deployment capabilities such as blue-green deployment and canary deployment and progres of delivered features in Kubernetes. These are the most important features in Argo-rollouts.
+
+Why Argo-rollout?
+There are differences between objects
+	- native kubernetes deployment object vs argo-rollout
+		- limitations of deployment object
+			1. Low control of the seep of the rollout
+			2. Inability to control traffic flow to the new version
+			3. No ability to query external metrics to verify an update
+			4. Unable to automatically abort and rollback the update
+
+		- features of argo-rollout
+			1. blue-green update strategy
+			2. canary update strategy
+			3. ingress controller integration
+			4. service mesh integration
+			5. automated rollbacks and automated promotions
+
+
+Use cases of Argo-rollouts:
+---------------------------
+Blue-green deployment strategy: allow user to specify active service and preview service
+	- The rollout will configure the preview service to send traffic to the new version while active service continues to receive production traffic. Once the user is satisfied they can promote the preview service to become the new active service.
+
+Canary-deployment strategy
+	- User wnat to slowly give the new version more production traffic. They start to giving it a small procentage of live traffic and wait a while before giving the new version more traffic. Eventually the new version will receive all the production traffic. With Canary strategy the user specifies the procentage traffic they want the new version to receive and the ammount of time to wait between the procentage change.
+
+
+Native kubernetes deployment strategies
+---------------------------------------
+Rolling-update - default deployment strategy
+	- Slowly replace the old version with newer version. As the new version comes up the old version scales down in order to maintain the overall count of the application
+
+Recreate
+	- Deletes all old version applications and recreate applications with the new version. As a result this sensures that applications with different versions never run at the same time, but there is downtime durring the deployment.
+
+
+Argo-rollout strategies
+-----------------------
+Rolling-update
+	- Same as the native deployment strategy - mutual strategy between Argo-rollout and kubernetes native deplyment
+
+Blue-green deployment strategy
+	- stage one - all traffic goes true old version
+	- stage two - new version is deployed and users can perform tests on the new version
+	- stage three - live traffic is redirected to the new version
+	- stage four - all lve traffic is redirected to the new version
+
+Canary deployment strategy - we can define the exact nuber of stages and procentages in the deployment. Example strategy:
+	- stage one - all traffic goes true old version
+	- stage two - new version handles small procentage (example: 10%) of the live traffic
+	- stage three - when the new version is verified to run correctly more live traffic is redirected to it (example: 33%)
+	- stage four - all lve traffic is redirected to the new version
+
+
+
+Argo-rollouts overview
+======================
+
+Components of Argo-rollout
+--------------------------
+First component - Argo-rollout controller - main controller that monitor the clusters for events and reacts when a resource of type rollout is changed. The controller will read all the details of the rollout and set the cluster in the state as described in the rollout definition.
+
+Second conponent - Argo-rollout resource - custom kubernetes resource introduced and managed by Argo-rollout. It is mostrly compatible with native Kubernetes deployment but is able to controll the sateges, thresholds and advanced deployment methods such as canary and blue-green strategy. 
+
+Argo-controller will reacto only on changes on rollout resources! I twill do nothing for normal (native kubernetes) deployment resources. This means that we need to migrate our deployment to rollouts if we want to manage them with Argo-rollout. It Also means that we can install Argo-rollouts on clusters that are also deploying applications with alternative methods - there are no conflicts between different methods.
+
+
+Argo-rollouts repo - https://github.com/argoproj/argo-rollouts
+
+Examples for deployments - https://github.com/argoproj/argo-rollouts/tree/master/examples
+
+Blue-grren deployment - https://github.com/argoproj/argo-rollouts/blob/master/examples/rollout-bluegreen.yaml
+
+
+rollout-bluegreen.yaml
+-----------------------------------------------
+# This example demonstrates a Rollout using the blue-green update strategy, which contains a manual
+# gate before promoting the new stack.
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rollout-bluegreen
+spec:
+  replicas: 2
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: rollout-bluegreen
+  template:
+    metadata:
+      labels:
+        app: rollout-bluegreen
+    spec:
+      containers:
+      - name: rollouts-demo
+        image: argoproj/rollouts-demo:blue
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+  strategy:
+    blueGreen: 
+      # activeService specifies the service to update with the new template hash at time of promotion.
+      # This field is mandatory for the blueGreen update strategy.
+      activeService: rollout-bluegreen-active
+      # previewService specifies the service to update with the new template hash before promotion.
+      # This allows the preview stack to be reachable without serving production traffic.
+      # This field is optional.
+      previewService: rollout-bluegreen-preview
+      # autoPromotionEnabled disables automated promotion of the new stack by pausing the rollout
+      # immediately before the promotion. If omitted, the default behavior is to promote the new
+      # stack as soon as the ReplicaSet are completely ready/available.
+      # Rollouts can be resumed using: `kubectl argo rollouts promote ROLLOUT`
+      autoPromotionEnabled: false
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-active				# active service
+spec:
+  selector:
+    app: rollout-bluegreen
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: rollout-bluegreen-preview				# preview service
+spec:
+  selector:
+    app: rollout-bluegreen
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+-----------------------------------------------
+
+
+Third component - ingress/service - we can redirect traffic to active, preview or both versions.
+
+Fourth component - AnalisysTemplate - capability to connect a rollout to metric provider and define a specific treshold for certain metrics that will decide if an update is successful or not. For each analisys we can define one or more metrics queries along with their expected results. A rollout will progress on its own if metrics queries are good, rollback automatically if metrics show failure and pause the rollout if metrics cannot provide success or failure answer.
+
+Fifth component - Metric providers - Argo-rollout includes native integration for several popular metrics providers that we can use in the analisys resources to automatically promote or rollback an rollout.
+
+
+
+
+Argo-rollouts Installation
+==========================
+
+Installation documentation - https://argo-rollouts.readthedocs.io/en/stable/installation/
+
+
+Step 1:
+-------
+install.yaml - Standard installation method.
+	Create argo-rollouts namespace
+		terminal --> kubectl create namespace argo-rollouts
+
+		# result: namespace/argo-rollouts created
+
+	Apply argo-rollouts manifest into argo-rollouts namepsace
+		terminal --> kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+
+		# result:
+		customresourcedefinition.apiextensions.k8s.io/analysisruns.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/analysistemplates.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/clusteranalysistemplates.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/experiments.argoproj.io created
+		customresourcedefinition.apiextensions.k8s.io/rollouts.argoproj.io created
+		serviceaccount/argo-rollouts created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-admin created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-edit created
+		clusterrole.rbac.authorization.k8s.io/argo-rollouts-aggregate-to-view created
+		clusterrolebinding.rbac.authorization.k8s.io/argo-rollouts created
+		configmap/argo-rollouts-config created
+		secret/argo-rollouts-notification-secret created
+		service/argo-rollouts-metrics created
+		deployment.apps/argo-rollouts created
+
+
+	Confirm components installtion
+		terminal --> kubectl get all -n argo-rollouts
+
+		# result:
+		NAME                                 READY   STATUS    RESTARTS   AGE
+		pod/argo-rollouts-65c8945cc7-zchlm   1/1     Running   0          4m40s
+
+		NAME                            TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+		service/argo-rollouts-metrics   ClusterIP   10.96.238.38   <none>        8090/TCP   4m40s
+
+		NAME                            READY   UP-TO-DATE   AVAILABLE   AGE
+		deployment.apps/argo-rollouts   1/1     1            1           4m40s
+
+		NAME                                       DESIRED   CURRENT   READY   AGE
+		replicaset.apps/argo-rollouts-65c8945cc7   1         1         1       4m40s
+
+
+Step 2:
+-------
+Kubectl Plugin Installation on Windows with shell
+-------------------------------------------------
+
+Install kargo dashboard
+	terminal --> kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/dashboard-install.yaml
+
+	# result:
+	serviceaccount/argo-rollouts-dashboard created
+	clusterrole.rbac.authorization.k8s.io/argo-rollouts-dashboard created
+	clusterrolebinding.rbac.authorization.k8s.io/argo-rollouts-dashboard created
+	service/argo-rollouts-dashboard created
+	deployment.apps/argo-rollouts-dashboard created
+
+	Foreward port for kargo dashboard
+		terminal --> kubectl port-forward -n argo-rollouts svc/argo-rollouts-dashboard 3100:3100
+
+
+Set additional service dashboard-ingress.yaml for dashboard to access it.
+
+dashboard-ingress.yaml
+-----------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-rollouts-dashboard
+  namespace: argo-rollouts
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: rollouts.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-rollouts-dashboard
+            port:
+              number: 3100
+-----------------------------------------------------
+
+Create the service
+	terminal --> kubectl apply -f dashboard-ingress.yaml
+
+	# result: ingress.networking.k8s.io/argo-rollouts-dashboard created
+
+
+
+Confirm components installtion
+	terminal --> kubectl get all -n argo-rollouts
+
+
+	# result:
+	NAME                                           READY   STATUS    RESTARTS   AGE
+	pod/argo-rollouts-65c8945cc7-9rg85             1/1     Running   0          4h13m
+	pod/argo-rollouts-dashboard-5659ccf55b-pxvgh   1/1     Running   0          123m
+
+	NAME                              TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)    AGE
+	service/argo-rollouts-dashboard   ClusterIP   10.96.41.223   <none>        3100/TCP   123m
+	service/argo-rollouts-metrics     ClusterIP   10.96.126.95   <none>        8090/TCP   4h13m
+
+	NAME                                      READY   UP-TO-DATE   AVAILABLE   AGE
+	deployment.apps/argo-rollouts             1/1     1            1           4h13m
+	deployment.apps/argo-rollouts-dashboard   1/1     1            1           123m
+
+	NAME                                                 DESIRED   CURRENT   READY   AGE
+	replicaset.apps/argo-rollouts-65c8945cc7             1         1         1       4h13m
+	replicaset.apps/argo-rollouts-dashboard-5659ccf55b   1         1         1       123m
+
+
+Add host address to Windows host list
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 rollouts.localhost'
+		- save the file and exit
+
+
+STEP 3 
+------
+
+Download kargo-dashboards binary for Windows
+	terminal --> iwr https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-windows-amd64 -OutFile kubectl-argo-rollouts.exe
+
+Create folder
+terminal --> mkdir ~/bin -Force
+Move-Item ./kubectl-argo-rollouts.exe ~/bin/kubectl-argo-rollouts.exe
+
+Add the binary to PATH
+	terminal --> [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$env:USERPROFILE\bin", "User")
+
+
+Set Alias for kubectl-argo-rollouts:
+------------------------------------
+Open Power Shell profile AS ADMIN and set alias below. 
+	terminal --> code $PROFILE
+
+-----------------------------------------------------
+# Alias for kubectl
+Set-Alias -Name k -Value kubectl
+
+# Alias for kubectl-argo-rollouts
+Set-Alias -Name kargo -Value kubectl-argo-rollouts	# added
+-----------------------------------------------------
+
+Restart power shell 
+Load Power Shell profile
+	terminal --> . $PROFILE
+
+Verify binary installation
+	termimnal --> kubectl-argo-rollouts version
+	or
+	terminal --> kargo version
+
+# example result: 
+kubectl-argo-rollouts: v1.8.3+49fa151
+  BuildDate: 2025-06-04T22:26:13Z
+  GitCommit: 49fa1516cf71672b69e265267da4e1d16e1fe114
+  GitTreeState: clean
+  GoVersion: go1.23.9
+  Compiler: gc
+  Platform: linux/amd64
+
+
+We can now access Kargo dashboard at http://rollouts.localhost:32073/
+
+
+Open Kargo Dashboard on http://rollouts.localhost:32073/
+      			--------------------------------
+
+
+
+
+
+
+
+
