@@ -1,0 +1,56 @@
+In this course we will go over 4 Argo projects:
+	- Argo CD
+	- Argo Rollouts
+	- Argo Workflows
+	- Argo Events
+
+What is GitOps?: It uses the best DevOps practices like version control, CICD and applies them to infrastructure automation. We have DevOps practices on one side and infrastructure automation on the other side.
+
+Example: We have Ansible playbooks, Kubernetes manifests, terraform .tf files. We use this code to deploy on our destination.
+
+GitOps uses a Git repository as single source of truth for infrastructure definition. GitOps have 3 main benefits 
+	- We can have a good calibration with our teammates, review the changes and decide to merge the changes into main branch.
+	- Easily revert back with Git if new version has unexpected problems.
+	- We can have a flow to build, test and deploy our application automatically.
+
+
+In GitOps we have 2 models:
+
+PUSH MODEL
+----------
+We have MANIFEST of Kubernetes deployment in Git repository. When we create the manifest it triggers CI system (webhook). The CI system deploy it on Kubernetes cluster. We can also use external systems like Jenkins that try to connect to the cluster.
+
+Repo changes --> CI system --> Deploy on Kubernetes
+
+
+ARGOCD PULL MODEL
+-----------------
+ArgoCD is a controller in the Kubernetes cluster. It puls the latest changes from Git repository and sync the cluster status.
+
+What is ArgoCD - Declarative and GitOps continuous delivery tool for Kubernetes.
+What is the responsibility of ArgoCD? - Deploying a resources into Kubernetes cluster.
+How ArgoCD works? - Implemented as Kubernetes controller which continuously monitors a running application and compare the current or live state agains the desired state.
+
+
+ArgoCD workflow:
+ArgoCD --> Target state (git repo) & Live state (kubernetes cluster) --> synced --> No difference between git state and live state
+
+When a change is made on the repo, ArgoCD try to sync the target state and the live state by applying the latest changes to the cluster.
+
+ArgoCD components
+	- API
+	- Repository Service
+	- Application Controller
+
+API - gRPC and REST server which exposes the API. This API consume UI, CLI, gRPC and REST. External CI systems like Jenkins or Travis can connect to the API true authentication.
+
+Repository Service - internal service that maintains a lookhold cash of the git repository, holding the application manifests. It uses Redis for cashing proposes and it always has the lates version of our repositories.
+
+Application controller - uses the git repository in the repository service and try to compare the git state (target state) with the live state (cluster state). If detects out of sync application state it optionally takes corrective actions - pull the laytest changes and deploy them on the cluster.
+
+Sync hooks (detailed in the 6th sesction)
+
+What is Application in ArgoCD? - group of manifests that makeup an application. Application is CRD - custom resource definition.
+
+
+
