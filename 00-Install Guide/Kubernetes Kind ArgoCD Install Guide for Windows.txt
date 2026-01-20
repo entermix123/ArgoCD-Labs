@@ -2088,6 +2088,7 @@ Create argo-demo folder and clone the 2 folders from the repo:
 	|--argo-rollouts
 	   |-- nginx-ingress.yaml
 	   |-- nginx-rollouts.yaml
+	   |-- webhook-ingress.yaml
 
 2.3. Push the fils
 	terminal --> git add .
