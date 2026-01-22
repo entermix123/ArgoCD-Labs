@@ -556,11 +556,415 @@ From the folder location create Docker secret
 
 
 
+Install MinIO artifacts storage with Helm
+=============================================
+
+MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+
+Prerequisites
+	- kubectl CLI tool
+	- Helm CLI tool
+
+MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+
+INSTALL MINIO WIHT HELM
+-----------------------
+1. Install MinIO helm repository on our PC
+	terminal --> helm repo add minio https://charts.min.io/
+	terminal --> helm repo update
+
+
+2. Install MinIO chart
+	terminal --> helm install argo-artifacts minio/minio --set resources.requests.memory=512Mi --set replicas=1 --set persistence.enabled=false --set mode=standalone --set rootUser=admin --set rootPassword=password123 --set buckets[0].name=my-bucket --set buckets[0].policy=none --set buckets[0].purge=false -n argo
+
+
+3. Create credentials secret in working namespace
+	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n argo-events
+
+	# result: secret/my-minio-cred created
+
+
+4. Set Ingress controller for MinIO to be externally accessed 
+
+minio-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-console-ingress
+  namespace: argo
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: minio.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-artifacts-minio-console
+            port:
+              number: 9001
+-------------------------------------------------
+
+Apply the ingress manifest
+	terminal --> k apply -f minio-ingress.yaml -n argo
+
+	# result: ingress.networking.k8s.io/minio-console-ingress created
+
+	
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 minio.localhost'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim /etc/hosts
+	- Add '127.0.0.1 minio.localhost'
+	- save changes and exit - escape, :wq!, enter
+
+
+ACCESS MINIO
+------------
+
+Decode the username (rootUser) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootUser}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: admin
+
+Decode the password (rootPassword) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootPassword}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: password123
+
+
+Access the MinIO app on http://minio.localhost:32073/login
+	- admin
+	- password123
+
+We can create bucket if we haven't with the installation command.
+Create a bucket named 'my-bucket'. We will store our artifacts in this bucket.
+
+
+USE MINIO
+---------
+To use artifacts we need to configure MinIO repository to store the artifacts from the working namespace. MinIO repository is configured in minio-artifact-repo-cm.yaml configmap file below.
+
+minio-artifact-repo-cm.yam
+-------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # If you want to use this config map by default, name it "artifact-repositories". Otherwise, you can provide a reference to a
+  # different config map in `artifactRepositoryRef.configMap` in the workflow.
+  name: artifact-repository           # this name is not the default name
+  annotations:
+    # v3.0 and after - if you want to use a specific key, put that key into this annotation.
+    workflows.argoproj.io/default-artifact-repository: minio-artifact-repo
+data:
+  minio-artifact-repo: |
+    s3:
+      bucket: my-bucket
+      endpoint: argo-artifacts-minio.argo:9000
+      insecure: true
+      accessKeySecret:
+        name: my-minio-cred
+        key: access-key 
+      secretKeySecret:
+        name: my-minio-cred
+        key: secret-key
+-------------------------------------------------
+
+Create the configmap into the working namespace
+	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n argo-events
+
+	# result: configmap/artifact-repository created
+
+Confirm ConfigMap creation
+	terminal --> kubectl get configmap artifact-repository -n <namespace>
+
+	# result:
+	NAME                  DATA   AGE
+	artifact-repository   1      104m
 
 
 
 
 
+GENERATE GITHUB CREDENTIALS
+---------------------------
+
+We need to provide GitHub credentials to our workflow to access the application repository and manage it - clone it, make changes to the manifests etc.
+
+Login to GitHub - https://github.com/
+Go to https://github.com/settings/tokens
+	- Generate New Token (classic)
+		- Name: argo-workflows
+		- Scope
+			- repo - Full control of private repositories 
+			- workflow - Update GitHub Action workflows (Optional)
+		- Generate Token
+	- Copy the value (save it safe temporary)
+
+Create local environment variables with GitHub Username and Token
+	terminal --> $GITHUB_USERNAME = "git_username"			# set your username
+	terminal --> $GitHubTokenName = "argo-workflows"		# set the token name
+	terminal --> $GITHUB_TOKEN = "generated_token"			# set the token
+
+Test the creation of the environment cariables
+	terminal --> echo $GITHUB_USERNAME
+	terminal --> echo $GitHubTokenName
+	terminal --> echo $GITHUB_TOKEN
+
+
+Create secretfor workflow task in the next step in the same terminal session else the envs will be deleted and the access will be denied.
+
+
+We will use the environment variables to create secrets objects in our Kubernetes cluster and set them in the workflow.
+
+CREATE SECRETS FOR GITHUB CREDENTAILS IN THE SAME SHELL SESSION
+---------------------------------------------------------------
+
+Create secret in our working namespace to use GitHub credentials safetly
+	terminal --> kubectl create secret generic github-credentials --from-literal=username=$GITHUB_USERNAME --from-literal=token_name=$GitHubTokenName --from-literal=token=$GITHUB_TOKEN -n argo-events
+	
+	# result: secret/github-credentials created
+
+
+
+
+
+Install local GitLab repository with Docker 
+-------------------------------------------
+
+Create volumes on your Windows PC
+	terminal --> mkdir D:\Docker\gitlab\config
+	terminal --> mkdir D:\Docker\gitlab\logs
+	terminal --> mkdir D:\Docker\gitlab\data
+
+Start Docker container with GitLab with exact version (if we use latest we can update the version and lose the configs)
+	terminal --> docker run -d --hostname gitlab.local --name gitlab -p 80:80 -p 443:443 -p 22:22 --restart always -v D:\Docker\gitlab\config:/etc/gitlab -v D:\Docker\gitlab\logs:/var/log/gitlab -v D:\Docker\gitlab\data:/var/opt/gitlab gitlab/gitlab-ce:18.8.1-ce.0
+
+
+Set new password
+----------------
+
+Connecto the gitlab container
+	terminal --> docker exec -it gitlab bash
+
+Run the GitLab Rails console
+		terminal --> gitlab-rails console -e production
+
+Set the new password adn save it
+		terminal --> user = User.find_by(username: 'root')
+		terminal --> user.password = 'YourStrongPassword123!'
+		terminal --> user.password_confirmation = 'YourStrongPassword123!'
+		terminal --> user.save!
+
+		# result: => true
+
+Exit the console and container
+	terminal --> exit
+	terminal --> exit
+
+One line shell command (change the password)
+	terminal --> docker exec -it gitlab gitlab-rails runner "user = User.find_by(username: 'root'); user.password = 'YourStrongPassword123!'; user.password_confirmation = 'YourStrongPassword123!'; user.save!"
+
+	
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 gitlab.local'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim /etc/hosts
+	- Add '127.0.0.1 gitlab.local'
+	- save changes and exit - escape, :wq!, enter
+
+
+
+Login to GitLab on http://gitlab.localhost/users/sign_in
+	Username: root
+	Password: your_password
+
+Create a blank project
+	- name: argo-config
+	- Project URL: http://gitlab.localhost/root/argo-config
+	- Create project
+
+Creaet another project for our app
+	- name: my-app
+	- Project URL: http://gitlab.localhost/root/my-app
+	- Create project
+
+
+
+TEST CLUSTER <--> GITLAB CONNECTION
+-----------------------------------
+
+Our cluster must be connected with our GitLab server. In this case we are running both via Docker containers
+
+Find our GitLab IP address
+	terminal --> docker network inspect bridge | Select-String "Gateway"
+
+	# result: 172.17.0.1
+
+Test connections between cluster and GitLab
+	Try to reach Kind cluster from GitLab container
+		terminal --> docker exec -it gitlab curl -v http://172.17.0.1:32073
+	Try to reach GitLab container from Kind cluster
+		terminal --> docker exec -it kind-control-plane curl -v http://172.17.0.1
+
+	# if successfull we will set this IPs for connection between gitlab and kind cluster
+
+
+GENERATE GITLAB ACCESS TOKEN
+----------------------------
+
+Create User Personal Token to connect the 'argo-config' repository to ArgoCD
+	- connect to GitLab container
+		terminal --> docker exec -it gitlab gitlab-rails console
+
+	- Find the admin user 
+		terminal --> user = User.find_by(username: 'root')
+
+
+	- create personal token
+		terminal --> 
+token = user.personal_access_tokens.create(
+  name: 'gitlab-full-access',
+  scopes: ['api', 'read_repository', 'write_repository'],
+  expires_at: 1.year.from_now
+)
+	
+	- Display the token - COPYAND SAVE THE TOKEN IMMEDIATELY!
+		terminal --> 
+puts "=" * 60
+puts "TOKEN: #{token.token}"
+puts "=" * 60
+
+	- Verify creation
+		terminal --> 
+if token.persisted?
+  puts "✅ Token created successfully!"
+  puts "Name: #{token.name}"
+  puts "Scopes: #{token.scopes}"
+else
+  puts "❌ Error: #{token.errors.full_messages}"
+end
+
+	- Exit
+		terminal --> exit	
+
+
+Create access token for argo-config project
+	- go tp my-app repo/ Settings/Access tokens/Add new token
+		- Token name: argo-config-token
+		- Expiration date: No Expiration Date
+		- Select a role: Maintainer
+			- check 'api', 'read_repository' and 'write_repository' option
+		- Create project access token
+
+Create access token for my-app project
+	- go tp my-app repo/ Settings/Access tokens/Add new token
+		- Token name: my-app-token
+		- Expiration date: No Expiration Date
+		- Select a role: Maintainer
+			- check 'api', 'read_repository' and 'write_repository' option
+		- Create project access token
+
+We can use different tokens for the different projects (my-app and argo-config) We can use one user access token - not a good practice.
+
+Since the user is the same we use one env var in both secrets.
+
+
+ALLOW LOCAL HOOKS
+-----------------
+Go to GitLab/Admin/Settings/Network/Outbound requests/
+	- check 'Allow requests to the local network from webhooks and integrations'
+	- check 'Allow requests to the local network from system hooks'
+	- in the Local IP addresses and domain names ... add
+		172.17.0.1
+		127.0.0.1
+		argo.events
+	- Save Changes
+
+
+
+CREATE ENV VARIABLES WITH GITLAB CREDENTIALS 
+--------------------------------------------
+Create local environment variables with GitLab Username and Tokens
+	terminal --> $GITLAB_USERNAME = "root"				# set your username
+	terminal --> $GITLAB_USER_TOKEN = "generated_user_token"	# set your user token
+	terminal --> $GITLAB_CONFIG_TOKEN = "generated_config_token"	# set the config token
+	terminal --> $GITLAB_APP_TOKEN = "generated_app_token"		# set the app token
+
+Test the creation of the environment cariables
+	terminal --> echo $GITLAB_USERNAME
+	terminal --> echo $GITLAB_USER_TOKEN
+	terminal --> echo $GITLAB_APP_TOKEN
+	terminal --> echo $GITLAB_CONFIG_TOKEN
+
+
+CREATE SECRETS FOR GITLAB CREDENTAILS
+-------------------------------------
+Create secret in 'argo-events' namespace to use GitLab credentials for creating the webhook in my-app project
+	terminal --> kubectl create secret generic app-repo-credentials --from-literal=username=$GITLAB_USERNAME --from-literal=token=$GITLAB_APP_TOKEN -n argo-events
+
+	# result: secret/app-repo-credentials created
+
+Create secret in 'argo-events' namespace to use GitLab credentials for managing used image in the roolout in argo-config project
+	terminal --> kubectl create secret generic config-repo-credentials --from-literal=username=$GITLAB_USERNAME --from-literal=token=$GITLAB_CONFIG_TOKEN -n argo-events
+
+	# result: secret/github-credentials created
+
+We use this secret in event source and in the sersor manifests.
+
+
+
+GIVE ARGOCD ACCESS TO GITLAB REPO
+---------------------------------
+
+Create secret for GitLab repository access
+	terminal --> kubectl create secret generic argocd-gitlab-repo --from-literal=username=root --from-literal=password=$GITLAB_USER_TOKEN --from-literal=url=http://172.17.0.1/root/argo-config.git -n argocd
+
+Label it so ArgoCD recognizes it as a repository credential
+	terminal --> kubectl label secret argocd-gitlab-repo argocd.argoproj.io/secret-type=repository -n argocd
+
+Check if the repository is added successfully in ArgoCD UI - https://argocd.localhost:32074/settings/repos
+
+
+
+GIVE ARGO WORKFLOWS ACCESS TO NEXUS
+-----------------------------------
+
+For this task we need to create Docker secret called 'docker-config-secret' in our Argo Workflows working 'argo-events' namespace. We have to mount our docker credentials to this sescret.
+
+We need to create docker-config.json file and set the Nexus credentials so the workflow can pull and push images.
+
+1. Encode the nexus creadentials with shell
+	terminal --> $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("admin:admin123"))
+$auth
+	result: YWRtaW46YWRtaW4xMjM=
+
+2. Create docker-config.json
+-----------------------------------------
+{
+  "auths": {
+    "host.docker.internal:8085": {
+      "auth": "YWRtaW46YWRtaW4xMjM="
+    }
+  }
+}
+-----------------------------------------
+
+From the folder location create Docker secret
+	terminal --> kubectl create secret generic docker-config-secret --from-file=config.json=./docker-config.json -n argo-events
+
+	# result: secret/docker-config-secret created
 
 
 
