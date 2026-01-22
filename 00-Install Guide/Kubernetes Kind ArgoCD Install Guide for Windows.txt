@@ -1,6 +1,6 @@
 
-INSTALL ARGOCD USING HELM CHARTS
-================================
+INSTALL AND USE ARGOCD STACK
+============================
 
 We need to install evironment tools depending on what kind of setup we will use for managing Kubernetes clusters.
 
@@ -27,7 +27,8 @@ Example CI/CD pipeline configuration with GitHub
 
 Example CI/CD pipeline configuration with GitLab
 	16. Install GitLab and set local repositories
-	17. 
+	17. Deploy Argo SetUp
+	18. Add inline analysis
 
 
 
@@ -1997,18 +1998,38 @@ Create secret in our working namespace to use GitHub credentials safetly
 Install local GitLab repository with Docker 
 -------------------------------------------
 
-Start Docker container with GitLab
-	terminal --> docker run -d --hostname gitlab.local --name gitlab -p 443:443 -p 80:80 -p 22:22 --restart always -v ~/gitlab/config:/etc/gitlab -v ~/gitlab/logs:/var/log/gitlab -v ~/gitlab/data:/var/opt/gitlab gitlab/gitlab-ce:latest
+Create volumes on your Windows PC
+	terminal --> mkdir D:\Docker\gitlab\config
+	terminal --> mkdir D:\Docker\gitlab\logs
+	terminal --> mkdir D:\Docker\gitlab\data
+
+Start Docker container with GitLab with exact version (if we use latest we can update the version and lose the configs)
+	terminal --> docker run -d --hostname gitlab.local --name gitlab -p 80:80 -p 443:443 -p 22:22 --restart always -v D:\Docker\gitlab\config:/etc/gitlab -v D:\Docker\gitlab\logs:/var/log/gitlab -v D:\Docker\gitlab\data:/var/opt/gitlab gitlab/gitlab-ce:18.8.1-ce.0
 
 
 Set new password
-	terminal --> docker exec -it gitlab gitlab-rake "gitlab:password:reset[root]"
-	
-	Wait for the console to ask for password
-		terminal --> example_passowrd
-		terminal --> confirm password
+----------------
 
-	# result: Password successfully updated for user with username root.
+Connecto the gitlab container
+	terminal --> docker exec -it gitlab bash
+
+Run the GitLab Rails console
+		terminal --> gitlab-rails console -e production
+
+Set the new password adn save it
+		terminal --> user = User.find_by(username: 'root')
+		terminal --> user.password = 'YourStrongPassword123!'
+		terminal --> user.password_confirmation = 'YourStrongPassword123!'
+		terminal --> user.save!
+
+		# result: => true
+
+Exit the console and container
+	terminal --> exit
+	terminal --> exit
+
+One line shell command (change the password)
+	terminal --> docker exec -it gitlab gitlab-rails runner "user = User.find_by(username: 'root'); user.password = 'YourStrongPassword123!'; user.password_confirmation = 'YourStrongPassword123!'; user.save!"
 
 	
 Add host address to Windows host list on Windows
@@ -2137,8 +2158,8 @@ CREATE ENV VARIABLES WITH GITLAB CREDENTIALS
 Create local environment variables with GitLab Username and Tokens
 	terminal --> $GITLAB_USERNAME = "root"				# set your username
 	terminal --> $GITLAB_USER_TOKEN = "generated_user_token"	# set your user token
-	terminal --> $GITLAB_APP_TOKEN = "generated_app_token"		# set the app token
 	terminal --> $GITLAB_CONFIG_TOKEN = "generated_config_token"	# set the config token
+	terminal --> $GITLAB_APP_TOKEN = "generated_app_token"		# set the app token
 
 Test the creation of the environment cariables
 	terminal --> echo $GITLAB_USERNAME
@@ -2176,7 +2197,7 @@ Check if the repository is added successfully in ArgoCD UI - https://argocd.loca
 
 
 
-GIVE ARGO WORKFLOWS ACCESS TO NYXUS
+GIVE ARGO WORKFLOWS ACCESS TO NEXUS
 -----------------------------------
 
 For this task we need to create Docker secret called 'docker-config-secret' in our Argo Workflows working 'argo-events' namespace. We have to mount our docker credentials to this sescret.
@@ -2266,6 +2287,11 @@ Create argo-demo folder and clone the 2 folders from the repo:
 
 
 
+
+
+
+17. Deploy Argo SetUp
+=====================
 
 
 argo-events
@@ -2385,12 +2411,16 @@ spec:
               metadata:
                 generateName: argo-demo-
               spec:
+                ttlStrategy:
+                  secondsAfterCompletion: 3600   # Delete completed workflow pods after 1 hour
+                  secondsAfterSuccess: 3600      # Delete successful workflow pods after 1 hour
+                  # secondsAfterFailure: 86400     # Delete failed workflows after 1 day
                 arguments:
                   parameters:
                     - name: app-repo-url
-                      value: http://172.17.0.1/root/my-app.git
+                      value: http://172.17.0.1/root/my-app.git          # app repo url to create webhook
                     - name: argo-config-repo-url
-                      value: http://172.17.0.1/root/argo-config.git
+                      value: http://172.17.0.1/root/argo-config.git     # argo-config repo url to change image tag
                     - name: app-clone-dest
                       value: /tmp/app
                     - name: argo-config-clone-dest
@@ -2532,6 +2562,7 @@ kind: Rollout
 metadata:
   name: nginx-rollouts
 spec:
+  revisionHistoryLimit: 5               # Keep only last 5 revisions (default is 10)
   replicas: 5
   strategy:
     canary:
@@ -2834,7 +2865,304 @@ If we delete the app and we redeploy it we need to recreate the webhook also bec
 		# result: deployment.apps/ci-eventsource-p7bcl restarted
 
 	Now the webhook is recreated and we can trigger workflows again with push events.
+		- Edit the webhook and set 'Push events: All branches' !!!
+		- Save changes
+
+	We can now make changes to the app and the workflow will be triggered
 		
+
+
+
+
+18. Add inline analysis
+=======================
+
+We will use simple flask analysis application to test the main application accessability.
+
+We will create analysis application image nad deploy it in separate namespace so we dont mix applications deployments.
+
+
+Create canary-analysis namespace
+	terminal --> k create ns canary-analysis
+
+	# result: namespace/canary-analysis created
+
+
+Analysis Application resources
+	- analysis-app.py
+	- Dockerfile
+
+analysis-app.py
+-------------------------------------------------
+### WE are using a flask script to get the url of the application and try to connect to it 5 times at 5 seconds intervals and returns one of the true or false values based on "200 response_code" in a json format, if the success_rate is 80% or more , it returns "true" value, Otherwise it returns "false" value
+from flask import Flask, request, jsonify
+import requests, time
+
+app = Flask(__name__)
+
+@app.route('/measure_success_rate', methods=['POST'])
+def measure_success_rate():
+    url = request.json.get('url')
+
+    if not url:
+        return jsonify({'error': 'URL is missing in the request body'}), 400
+
+    success_count = 0
+
+    for _ in range(5):
+        try:
+            response = requests.get(url)
+        except requests.exceptions.RequestException:
+            pass
+        else:
+            if response.status_code == 200:
+                success_count += 1
+        time.sleep(5)
+        
+    success_rate = (success_count / 5) * 100
+    if int(success_rate) >= 80:
+        return jsonify({'data': {'ok': 'true'}})
+    else:
+        return jsonify({'data': {'ok': 'false'}})
+
+if __name__ == '__main__':
+    # Run on all interfaces so it's accessible within the cluster
+    app.run(host='0.0.0.0', port=5001)
+-------------------------------------------------
+
+
+Dockrfile
+-------------------------------------------------
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Install required Python packages
+RUN pip install flask requests
+
+# Copy the Flask app
+COPY analysis-app.py .
+
+# Expose the port
+EXPOSE 5001
+
+# Run the Flask app
+CMD ["python", "analysis-app.py"]
+-------------------------------------------------
+
+
+Build image for web-analysis
+	trminal --> docker build -t web-analysis .
+
+Load the image into the cluster
+	terminal --> kind load docker-image web-analysis --name kind
+
+
+
+
+We will deploy cluster analysis template canary-analysis.yaml so it can be used across different namespaces.
+
+canary-analysis.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterAnalysisTemplate       # Set the template as a ClusterAnalysisTemplate, no namespace configured
+metadata:
+  name: success-rate
+spec:
+  args:
+  - name: service_port      # This is the variable related to the ip address where the analysis-app.py is located
+    value: "5001"           # port of the analysis app
+    # WE are using a flask script to get the url of the application and try to connect to it 5 times at 5 seconds intervals and returns one of the true or 
+    # false values based on "200 response_code" in a json format, if the success_rate is 80% or more , it returns "true" value, Otherwise it returns "false" value,
+    # you can find this simple app in the current directory (its name is analysis-app.py).
+  metrics:
+  - name: success-rate
+    successCondition: result == "true"
+    provider:
+      web:
+        method: POST
+        # Use Kubernetes service DNS name instead of external IP
+        url: "http://web-analysis.canary-analysis.svc.cluster.local:{{args.service_port}}/measure_success_rate"
+        timeoutSeconds: 50
+        headers:
+          - key: Content-Type             # if body is a json, it is recommended to set the Content-Type
+            value: "application/json"
+        jsonBody:                         # If using jsonBody Content-Type header will be automatically set to json
+          url: "http://nginx-service.argo-demo.svc.cluster.local:8080"   # this is the url of the application svc with local docker address
+        jsonPath: "{$.data.ok}"
+-------------------------------------------------
+
+Deploy the canary analysy
+	terminal --> k apply -f canary-analysis.yaml
+
+	# result: clusteranalysistemplate.argoproj.io/success-rate created
+
+
+Create deployment for the analysis app
+
+web-analysis-deployment.yaml
+-----------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-analysis
+  namespace: canary-analysis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-analysis
+  template:
+    metadata:
+      labels:
+        app: web-analysis
+    spec:
+      containers:
+      - name: web-analysis
+        image: web-analysis
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 5001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-analysis
+  namespace: canary-analysis
+spec:
+  selector:
+    app: web-analysis
+  ports:
+  - protocol: TCP
+    port: 5001
+    targetPort: 5001
+  type: ClusterIP
+-----------------------------------------------
+
+Deploy the analysis application
+	terminal --> k apply -f web-analysis-deployment.yaml -n canary-analysis
+
+	# result:
+	deployment.apps/web-analysis created
+	service/web-analysis created
+
+Check if the serice is running
+	terminal --> kubectl get pods -n canary-analysis -l app=web-analysis
+
+	# result:
+	NAME                            READY   STATUS    RESTARTS   AGE
+	web-analysis-5f9bc64f67-2tgn6   1/1     Running   0          6m29s
+
+We can check the logs of the analysis app
+	terminal --> kubectl logs -f deployment/web-analysis -n canary-analysis
+
+
+
+Add the analysis to the rollout
+-------------------------------
+
+nginx-rollouts.yaml
+-----------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: nginx-rollouts
+  namespace: argo-demo
+spec:
+  revisionHistoryLimit: 5               # Keep only last 5 revisions (default is 10)
+  replicas: 5
+  strategy:
+    canary:
+      steps:
+      - setWeight: 20                   # first step is 20% of the traffic - 1 of 5 pods
+      - pause: {}                       # manual promotion required
+      - analysis:                           # This is an Inline Analysis
+          templates:
+          - templateName: success-rate
+            clusterScope: true          # using a cluster-scoped AnalysisTemplate (deployed in another namespace)
+          args:
+          - name: service_port              # This is the variable related to the port of analysis-app.py flask app
+            value: "5001"
+      - setWeight: 40                   # second step is 40% of the traffic - 2 of 5 pods
+      - pause: {duration: 10s}          # auto promotion afer 10 seconds
+      - setWeight: 60                   # third step is 60% of the traffic - 3 of 5 pods
+      - pause: {duration: 20s}          # auto promotion afer 20 seconds
+      - setWeight: 80                   # fourth step is 80% of the traffic - 4 of 5 pods
+      - pause: {duration: 1m}           # auto promotion afer 1 minute
+  selector:
+    matchLabels:
+      app: nginx-rollouts
+  template:
+    metadata:
+      labels:
+        app: nginx-rollouts
+    spec:
+      containers:
+      - name: nginx-rollouts
+        image: host.docker.internal:8085/argo-demo/nginx:529057ec-53cb-4100-9390-87a8f64dac30
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  ports:
+  - port: 8080
+    targetPort: 80
+  selector:
+    app: nginx-rollouts
+-----------------------------------------------
+
+
+Push the changes to the argo-config repository
+	terminal --> git add .
+	terminal --> git commit -m "added canary analysis to rollout"
+	terminal --> git push
+
+The application will detect change in the argo-config repository and will sync the chnages.
+Now we should have additional step in the visualized roolout in Argo Rollouts UI.
+We can check the analysis step in Argo Rollouts UI on http://rollouts.localhost:32073/rollouts/
+
+
+We can make a change to the application and test the analysis
+
+MAKE A CHANGE
+-------------
+
+When we create and push change to our app
+
+index.html
+-------------------------------------------------
+    <div class="container">
+        <h1>Welcome to My Website, Version 3.0</h1>
+    </div>
+-------------------------------------------------
+# from '1.0' to '2.0' - changed subversion
+
+Commit changes
+	terminal --> git add .
+	terminal --> git commit -m "version 3"
+ 	terminal --> git push
+
+
+The change in the repostiory will trigger the webhook and new workflow will start.
+
+After the workflow finishes the used image will be changed in the rollout.
+The application will autoamtic sync after 3 minutes.
+The application will start update (canary deployment will start).
+
+We can fooolow the rollout and promote the first step on http://rollouts.localhost:32073/rollouts/ or with Argo UI in the argo-demo namepsace.
+	terminal --> kargo promote nginx-rollouts -n argo-demo
+
+	# result: rollout 'nginx-rollouts' promoted
+
+After the promotion the analysis step will start. If it is successfull the rollout will continue with the next step of the deployment. If fails the deployment will be cancelled and the old version of the application will be rolled back.
+
+
+
+
 
 
 
