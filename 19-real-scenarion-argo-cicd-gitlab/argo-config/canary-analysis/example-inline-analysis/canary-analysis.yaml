@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: success-rate
+  namespace: canary
+spec:
+  args:
+  - name: service_port      # This is the variable related to the ip address where the analysis-app.py is located
+    value: "5001"           # port of the analysis app
+    # WE are using a flask script to get the url of the application and try to connect to it 5 times at 5 seconds intervals and returns one of the true or 
+    # false values based on "200 response_code" in a json format, if the success_rate is 80% or more , it returns "true" value, Otherwise it returns "false" value,
+    # you can find this simple app in the current directory (its name is analysis-app.py).
+  metrics:
+  - name: success-rate
+    successCondition: result == "true"
+    provider:
+      web:
+        method: POST
+        # Use Kubernetes service DNS name instead of external IP
+        url: "http://web-analysis.canary.svc.cluster.local:{{args.service_port}}/measure_success_rate"
+        timeoutSeconds: 50
+        headers:
+          - key: Content-Type             # if body is a json, it is recommended to set the Content-Type
+            value: "application/json"
+        jsonBody:                         # If using jsonBody Content-Type header will be automatically set to json
+          url: "http://rollouts-setweight.canary.svc.cluster.local:5000"  # this is the url of the application with local docker address
+        jsonPath: "{$.data.ok}"
