@@ -1,0 +1,50 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: nginx-rollouts
+  namespace: argo-demo
+spec:
+  revisionHistoryLimit: 5               # Keep only last 5 revisions (default is 10)
+  replicas: 5
+  strategy:
+    canary:
+      steps:
+      - setWeight: 20                   # first step is 20% of the traffic - 1 of 5 pods
+      - pause: {}                       # manual promotion required
+      - analysis:                           # This is an Inline Analysis
+          templates:
+          - templateName: success-rate
+            clusterScope: true          # using a cluster-scoped AnalysisTemplate (deployed in another namespace)
+          args:
+          - name: service_port              # This is the variable related to the port of analysis-app.py flask app
+            value: "5001"
+      - setWeight: 40                   # second step is 40% of the traffic - 2 of 5 pods
+      - pause: {duration: 10s}          # auto promotion afer 10 seconds
+      - setWeight: 60                   # third step is 60% of the traffic - 3 of 5 pods
+      - pause: {duration: 20s}          # auto promotion afer 20 seconds
+      - setWeight: 80                   # fourth step is 80% of the traffic - 4 of 5 pods
+      - pause: {duration: 1m}           # auto promotion afer 1 minute
+  selector:
+    matchLabels:
+      app: nginx-rollouts
+  template:
+    metadata:
+      labels:
+        app: nginx-rollouts
+    spec:
+      containers:
+      - name: nginx-rollouts
+        image: host.docker.internal:8085/argo-demo/nginx:abb6283a-a528-47d3-bbd2-2193447b5a1c
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  ports:
+  - port: 8080
+    targetPort: 80
+  selector:
+    app: nginx-rollouts

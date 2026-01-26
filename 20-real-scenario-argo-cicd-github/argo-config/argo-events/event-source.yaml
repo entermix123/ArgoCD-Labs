@@ -1,0 +1,72 @@
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource				# event source obejct
+metadata:
+  name: ci
+  namespace: argo-events
+spec:
+  service:
+    ports:
+      - port: 12000
+        targetPort: 12000
+  github:                           # Changed from gitlab to github
+    argo-demo:
+      owner: entermix123            # Your GitHub username/org
+      repository: my-app            # Repository name
+      webhook:
+        endpoint: /push
+        port: "12000"
+        url: https://xxxxxxxxxxxx.ngrok-free.app                    # Must be publicly accessible! Change when ngrok restarts
+        # GitHub webhooks MUST reach a public endpoint
+        # Options:
+        # 1. Use ngrok: http://your-ngrok-url.ngrok.io
+        # 2. Use your public IP: http://YOUR_PUBLIC_IP:32073
+        # 3. Use a domain: http://webhook.yourdomain.com
+      events:
+        - push                    # PushEvent (GitHub)
+      apiToken:                   # GitHub apiToken
+        key: token
+        name: app-repo-credentials
+      webhookSecret:                  # GitHub webhookSecret - prevent requests outside GitHub
+        name: github-webhook-secret   # GitHub webhookSecret name
+        key: webhook-secret           # GitHub webhookSecret key
+      insecure: true
+      active: true
+      contentType: json
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-events-ingress       # ingress for the webhook access
+  namespace: argo-events
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /push
+        pathType: Prefix
+        backend:
+          service:
+            name: ci-eventsource-svc        # the backend service name created by the event source
+            port:
+              number: 12000
+
+# Use if the ingress is connecting out of Docker network
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress                                  # ingress
+# metadata:
+#   name: argo-demo-ingress
+#   namespace: argo-events
+# spec:
+#   ingressClassName: nginx
+#   rules:
+#   - host: argo.events                         # host name of the ingress 
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: ci-eventsource-svc          # the backend service name created by the event source
+#             port:
+#               number: 12000

@@ -1,0 +1,18 @@
+# This ingress is matching the Docker internal network with exact path
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-events-ingress
+  namespace: argo-events
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /push
+        pathType: Exact
+        backend:
+          service:
+            name: ci-eventsource-svc
+            port:
+              number: 12000

@@ -1,0 +1,4 @@
+ArgoCD setup with GitHub repository. The setup is configured with Docker Desktop Kind cluster. Used power shell CLI.
+
+Detailed installation guide can be found in the same repository '00-Install Guide/Kubernetes Kind ArgoCD Install Guide for Windows.txt'
+
