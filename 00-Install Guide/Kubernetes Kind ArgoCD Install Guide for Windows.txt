@@ -29,6 +29,15 @@ Example CI/CD pipeline configuration with GitLab
 	16. Install GitLab and set local repositories
 	17. Deploy Argo SetUp
 	18. Add inline analysis
+	19. Backup Docker Desktop Kind clustr
+
+Example CI/CD pipeline configuration with GitHub
+	20. Install Nexus private image registry
+	21. Install MinIO artifacts storage with Helm
+	22. INstall NGROK
+	23. ArgoCD Setup with GitHub
+	24. Install ESO (External Secret Operator) with Helm
+
 
 
 
@@ -2625,6 +2634,18 @@ spec:
               number: 8080
 -------------------------------------------------
 
+
+Add host address to Windows host list
+	- Open PowerShell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 argo-demo'
+		- save the file and exit
+
+Add host address to Linux host list
+	terminal --> sudo vim /etc/hosts
+	- Add '127.0.0.1 argo-demo'
+	- save changes and exit - escape, :wq!, enter
+
 This is the ingress that expose the application.
 After the rollout is created the app should be accessabel on http://argo.demo:32073/
 
@@ -3159,6 +3180,1432 @@ We can fooolow the rollout and promote the first step on http://rollouts.localho
 	# result: rollout 'nginx-rollouts' promoted
 
 After the promotion the analysis step will start. If it is successfull the rollout will continue with the next step of the deployment. If fails the deployment will be cancelled and the old version of the application will be rolled back.
+
+
+
+
+
+19. Backup Docker Desktop Kind clustr
+=====================================
+
+Export cluster configuration
+----------------------------
+
+List cluster
+	terminal --> kind get clusters
+
+	# result: kind
+
+Export the cluster config
+	terminal --> kind export kubeconfig --name kind
+
+	# the config is save at C:\Users\your-user\.kube\config
+
+
+
+Export cluster resources
+------------------------
+
+Export all resources (deployments, services, configs, and secrets)
+	terminal -> kubectl get all --all-namespaces -o yaml > cluster-resources.yaml
+
+Export also PersistentVolumes (if any)
+	terminal --> kubectl get pv,pvc -o yaml >> cluster-resources.yaml
+
+
+
+Save Docker images
+------------------
+
+Save Docker images used on the cluster in text file
+	terminal --> kubectl get pods --all-namespaces -o jsonpath='{.items[*].spec.containers[*].image}' | ForEach-Object { $_ -replace ',','`n' } | Sort-Object -Unique | Out-File cluster-images.txt
+
+We can see the used images and save important ones
+	terminal --> docker save web-analysis -o web-analysis.tar
+
+
+22. Restore Process
+-------------------
+
+Recreate cluster 
+	terminal --> kind create cluster --config your-config.yaml
+
+load images
+	terminal --> kind load image-archive web-analysis.tar
+
+import kubeconfig, and apply
+	terminal --> kubectl apply -f cluster-resources.yaml
+
+
+
+
+
+
+
+
+
+
+
+Example CI/CD pipeline configuration with GitHub
+================================================
+
+
+20. Install Nexus private image registry
+========================================
+
+1. Download and install Java from: https://www.oracle.com/java/technologies/downloads/#jdk25-windows
+
+	Confirm java installation
+		terminal --> java -version
+
+2 Download Nexus Repository OSS (Open Source) for Windows - https://www.sonatype.com/products/nexus-community-edition-download
+
+3. Install Nexus
+	- unarchive on the PC and navigate to the folder
+	- Open shell as administrator and run
+		terminal --> .\install-nexus-service.bat
+
+4. Start Nexus service
+	terminal --> net start SonatypeNexusRepository
+
+	Check if port 8081 is listening
+		terminal --> netstat -ano | findstr :8081
+
+5. Login to Nexus on http://localhost:8081/#login
+
+	Find the initial generated credentials in the installed directory 'sonatype-work\nexus3\admin.password' or with shell
+		terminal --> type E:\Installed\nexus-3.88.0-08-win-x86_64\sonatype-work\nexus3\admin.password
+
+	Login to the app and finish the installtion. Relogin.
+		Username: admin
+		Password: admin123		(default)
+
+
+Create Nexus repository - example usage
+---------------------------------------
+- Open Nexus - http://localhost:8081
+- Go to Settings/Repositories/Create Repository/docker(hosted)
+	- Name: argo-demo
+	- Other Connectors
+		- HTTP: 8085
+	- Docker Registry API Support
+		Select Checkbox "Allow clients to use the V1 API to interact with this repository"
+	- Create Repository
+
+- Go to Settings/Security/Realms
+	- Set Docker Bearer Token Realm to Active
+	- Save
+
+ 
+
+Configure Docker Desktop to communicate with the created repository
+	- Open Docker/Settings/Docker Engine
+	- Add
+	-------------------------------------------------
+	{
+	  "insecure-registries": ["localhost:8085"]
+	}
+	-------------------------------------------------
+	- Apply and Restart
+
+
+
+Test Docker connection with Nexus by pushing the image created earlier
+	Login to Nesus true the configured address
+		terminal --> docker login host.docker.internal:8085
+		terminal --> admin
+		terminal --> nexsus_password
+
+	Retag (rename) and push the image we created earlier to the Nexus repository
+		terminal --> docker tag nginx:v1 host.docker.internal:8085/argo-demo/nginx:alpine
+		terminal --> docker push host.docker.internal:8085/argo-demo/nginx:alpine
+
+	The image should be visualized in the Nexus repository
+		- Go to http://localhost:8081/#browse/browse
+		- Then navigate to v2/argo-demo/nginx/tags
+
+
+
+
+Configure Argo Workflows to pull/push images from/to Nexus
+----------------------------------------------------------
+
+We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
+
+Configure Argo Workflows to communicate with Nexus repository
+	- Open Docker/Settings/Docker Engine
+	- Add
+	-------------------------------------------------
+	{
+	  "insecure-registries": ["localhost:8085", "host.docker.internal:8085"]
+	}
+	-------------------------------------------------
+	- Apply and Restart
+
+
+
+Configure Argo Workflows to pull images from Nexus
+--------------------------------------------------
+
+
+Create containerd daemonset configuration
+
+containerd-config-daemonset.yaml
+-------------------------------------------------
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: containerd-registry-config
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      name: containerd-registry-config
+  template:
+    metadata:
+      labels:
+        name: containerd-registry-config
+    spec:
+      hostPID: true
+      hostNetwork: true
+      initContainers:
+      - name: configure-containerd
+        image: alpine:latest
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          
+          # Check if configuration already exists
+          if grep -q "host.docker.internal:8085" /host/etc/containerd/config.toml 2>/dev/null; then
+            echo "Registry configuration already exists, skipping..."
+            exit 0
+          fi
+          
+          # Append registry configuration
+          cat >> /host/etc/containerd/config.toml << 'EOF'
+
+          [plugins."io.containerd.grpc.v1.cri".registry.mirrors."host.docker.internal:8085"]
+            endpoint = ["http://host.docker.internal:8085"]
+          [plugins."io.containerd.grpc.v1.cri".registry.configs."host.docker.internal:8085".tls]
+            insecure_skip_verify = true
+          EOF
+          
+          echo "Configuration added successfully"
+          
+          # Find and restart containerd process
+          CONTAINERD_PID=$(nsenter -t 1 -m -u -i -n -p pgrep containerd | head -n 1)
+          if [ -n "$CONTAINERD_PID" ]; then
+            echo "Sending SIGHUP to containerd (PID: $CONTAINERD_PID)"
+            nsenter -t 1 -m -u -i -n -p kill -HUP $CONTAINERD_PID
+            sleep 2
+            echo "Containerd reloaded"
+          else
+            echo "Warning: Could not find containerd process"
+          fi
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: containerd-config
+          mountPath: /host/etc/containerd
+      containers:
+      - name: pause
+        image: registry.k8s.io/pause:3.9
+        resources:
+          requests:
+            cpu: 1m
+            memory: 4Mi
+      volumes:
+      - name: containerd-config
+        hostPath:
+          path: /etc/containerd
+          type: Directory
+      tolerations:
+      - operator: Exists
+-------------------------------------------------
+
+Apply the deamonset
+	terminal --> kubectl apply -f containerd-config-daemonset.yaml
+
+	# result: daemonset.apps/containerd-registry-config created
+
+Test nodes communication
+	terminal --> k get nodes
+
+Wait 2 minutes and delete the daemonset
+	terminal --> kubectl delete -f containerd-config-daemonset.yaml
+
+
+
+Give Argo Workflows access to Nexus
+-----------------------------------
+
+For this task we need to create Docker secret called 'docker-config-secret' in our Argo Workflows working 'argo-events' namespace. We have to mount our docker credentials to this sescret.
+
+We need to create docker-config.json file and set the Nexus credentials so the workflow can pull and push images.
+
+1. Encode the nexus creadentials with shell
+	terminal --> $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("admin:admin123"))
+$auth
+	result: YWRtaW46YWRtaW4xMjM=
+
+2. Create docker-config.json
+-----------------------------------------
+{
+  "auths": {
+    "host.docker.internal:8085": {
+      "auth": "YWRtaW46YWRtaW4xMjM="
+    }
+  }
+}
+-----------------------------------------
+
+From the folder location create Docker secret
+	terminal --> kubectl create secret generic docker-config-secret --from-file=config.json=./docker-config.json -n argo-events
+
+	# result: secret/docker-config-secret created
+
+
+
+
+21. Install MinIO artifacts storage with Helm
+=============================================
+
+MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+
+Prerequisites
+	- kubectl CLI tool
+	- Helm CLI tool
+
+MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
+
+INSTALL MINIO WIHT HELM
+-----------------------
+1. Install MinIO helm repository on our PC
+	terminal --> helm repo add minio https://charts.min.io/
+	terminal --> helm repo update
+
+
+2. Install MinIO chart
+	terminal --> helm install argo-artifacts minio/minio --set resources.requests.memory=512Mi --set replicas=1 --set persistence.enabled=false --set mode=standalone --set rootUser=admin --set rootPassword=password123 --set buckets[0].name=my-bucket --set buckets[0].policy=none --set buckets[0].purge=false -n argo
+
+
+3. Create credentials secret in working namespace
+	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n argo-events
+
+	# result: secret/my-minio-cred created
+
+
+4. Set Ingress controller for MinIO to be externally accessed 
+
+minio-ingress.yaml
+-------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-console-ingress
+  namespace: argo
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: minio.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argo-artifacts-minio-console
+            port:
+              number: 9001
+-------------------------------------------------
+
+Apply the ingress manifest
+	terminal --> k apply -f minio-ingress.yaml -n argo
+
+	# result: ingress.networking.k8s.io/minio-console-ingress created
+
+	
+Add host address to Windows host list on Windows
+	- Open power Shell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 minio.localhost'
+		- save the file and exit
+
+Add host address to Windows host list on Linux
+	terminal --> sudo vim /etc/hosts
+	- Add '127.0.0.1 minio.localhost'
+	- save changes and exit - escape, :wq!, enter
+
+
+ACCESS MINIO
+------------
+
+Decode the username (rootUser) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootUser}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: admin
+
+Decode the password (rootPassword) with shell
+	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootPassword}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
+
+	# result: password123
+
+
+Access the MinIO app on http://minio.localhost:32073/login
+	- admin
+	- password123
+
+We can create bucket if we haven't with the installation command.
+Create a bucket named 'my-bucket'. We will store our artifacts in this bucket.
+
+
+USE MINIO
+---------
+To use artifacts we need to configure MinIO repository to store the artifacts from the working namespace. MinIO repository is configured in minio-artifact-repo-cm.yaml configmap file below.
+
+minio-artifact-repo-cm.yam
+-------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # If you want to use this config map by default, name it "artifact-repositories". Otherwise, you can provide a reference to a
+  # different config map in `artifactRepositoryRef.configMap` in the workflow.
+  name: artifact-repository           # this name is not the default name
+  annotations:
+    # v3.0 and after - if you want to use a specific key, put that key into this annotation.
+    workflows.argoproj.io/default-artifact-repository: minio-artifact-repo
+data:
+  minio-artifact-repo: |
+    s3:
+      bucket: my-bucket
+      endpoint: argo-artifacts-minio.argo:9000
+      insecure: true
+      accessKeySecret:
+        name: my-minio-cred
+        key: access-key 
+      secretKeySecret:
+        name: my-minio-cred
+        key: secret-key
+-------------------------------------------------
+
+Create the configmap into the working namespace
+	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n argo-events
+
+	# result: configmap/artifact-repository created
+
+Confirm ConfigMap creation
+	terminal --> kubectl get configmap artifact-repository -n <namespace>
+
+	# result:
+	NAME                  DATA   AGE
+	artifact-repository   1      104m
+
+
+
+
+
+22. INSTALL NGROK
+=================
+We will expose our PC with public domain with ngrok. Download ngrok - https://dashboard.ngrok.com/get-started
+
+Download ngrok for Windows 64bit and extract it in C:\Users\your_user\ngrok.exe
+
+Set Path to the Environment Variables - open power shell as administrator
+	admin terminal --> $oldPath = [Environment]::GetEnvironmentVariable("Path", "User")
+	admin terminal --> [Environment]::SetEnvironmentVariable("Path", "$oldPath;C:\Users\your-user", "User")   # change user
+
+Test ngrok installation
+	terminal --> ngrok version
+	terminal --> Get-Command ngrok
+
+	# result: ngrok version 3.35.0
+	# result: Application     ngrok  3.35.0     C:\Users\your-user\ngrok.exe
+	
+
+Run the following command to add your authtoken to the default ngrok.yml configuration file.
+	terminal --> ngrok config add-authtoken xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+We will use this command later to expose our PC with the command
+	terminal --> ngrok http 32073					# USE LATER !!!
+
+Copy the address shown in the next section to set it in the Argo event-source.yaml manifest.
+
+To prevent usage of the domain in by external requests we will set additional webhook secret.
+
+	
+
+
+
+
+
+23. ArgoCD Setup with GitHub
+============================
+
+Create 2 GitHub repositories
+	1. my-app
+	2. argo-config
+
+
+MY-APP REPO
+-----------
+
+This repository is contains simple application that we will use to test this example ArgoCD setup. When application is changed it will activate GitHub webhook that will trigger ArgoCD workflow.
+	
+my-app
+  |-- Dockerfile
+  |-- index.html
+
+Dockerfile
+-------------------------------------------------
+FROM nginx:alpine
+COPY index.html /usr/share/nginx/html/
+-------------------------------------------------
+
+index.html
+-------------------------------------------------
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to My Website</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        .container {
+            text-align: center;
+            color: #333;
+        }
+
+        h1 {
+            font-size: 3em;
+            margin-bottom: 0.5em;
+            color: #3498db;
+        }
+
+        p {
+            font-size: 1.5em;
+            margin-top: 0;
+            color: #777;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Welcome to My Website, Version 1.0</h1>
+    </div>
+</body>
+</html>
+-------------------------------------------------
+
+
+
+
+
+ARGO-CONFIG REPO
+----------------
+
+This repository contains ArgoCD configuration manifests files. It will trigger application update after the application image tag is changed by the workflow.
+
+argo-config
+	|--argo-cd
+	|  |-- argo-app.yaml
+	|
+	|--argo-events
+	|  |-- event-source.yaml
+	|  |-- sensor.yaml
+        |
+	|--canary-analysis
+	|  |--analysis-app
+ 	|  |   |-- analysis-app.py
+	|  |   |-- Dockerfile
+ 	|  |
+	|  |-- camary-analysis.yaml
+	|  |-- web-analysis-depoyment.yaml
+	|
+	|--argo-rollouts
+	   |-- nginx-ingress.yaml
+	   |-- nginx-rollouts.yaml
+	   |-- webhook-ingress.yaml
+
+
+We will go true all used resources and after we will deploy them.
+
+ARGO-CD
+-------
+
+|--argo-cd
+    |-- argo-app.yaml
+
+In the argo-app.yaml CRD we set the argo-config repository path and branch, CRD will be deployed in argocd namespace adn the application will be deployed in argo-demo namespace. Automated synchronization , prune and selfheal are enabled.
+
+argo-cd/argo-app.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argo-demo-application                 # application name
+  namespace: argocd                           # application namespace - visualize with ArgoCD           
+spec:
+  destination:
+    namespace: argo-demo                      # destination namespace - deployed in the argo-demo namespace
+    server: https://kubernetes.default.svc    # destination server
+  project: default                            # project
+  source:
+    path: argo-rollouts                       # path to the rollout manifest
+    repoURL: https://github.com/entermix123/argo-config.git     # config repostiory address
+    targetRevision: main                                        # target revision - can be branch, tag or commit
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    automated:                                   # sync options section
+      prune: true                                # prune resources - delete resources that are not in the manifest
+      selfHeal: true                             # self heal enabled - recreate deleted resources
+-------------------------------------------------
+
+
+
+
+ARGO EVENTS
+-----------
+
+|--argo-events
+   |-- event-source.yaml
+   |-- sensor.yaml
+
+In event-source CRD we set our public domain (GitHub must access our argo configuration and trigger the workflow by the application webhook), usage of secret for our GitHub credentials and ingress for the webhook. We have to generate secret and set it in the event source manifest to prevent external requests triggering our workflow and waste our resources. 
+
+In this example we use secret for GtHub webhook because we use ngrok domain exposure. In production we use different setup and secret method can be changed with other methods.
+
+argo-events/event-source.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource				# event source obejct
+metadata:
+  name: ci
+  namespace: argo-events
+spec:
+  service:
+    ports:
+      - port: 12000
+        targetPort: 12000
+  github:                           # Changed from gitlab to github
+    argo-demo:
+      owner: entermix123            # Your GitHub username/org
+      repository: my-app            # Repository name
+      webhook:
+        endpoint: /push
+        port: "12000"
+        url: https://xxxxxxxxxxx.ngrok-free.app                    # Must be publicly accessible! Change when ngrok restarts
+        # GitHub webhooks MUST reach a public endpoint
+        # Options:
+        # 1. Use ngrok: http://your-ngrok-url.ngrok.io
+        # 2. Use your public IP: http://YOUR_PUBLIC_IP:32073
+        # 3. Use a domain: http://webhook.yourdomain.com
+      events:
+        - push                    # PushEvent (GitHub)
+      apiToken:                   # GitHub apiToken
+        key: token
+        name: app-repo-credentials
+      webhookSecret:                  # GitHub webhookSecret - prevent requests outside GitHub
+        name: github-webhook-secret   # GitHub webhookSecret name
+        key: webhook-secret           # GitHub webhookSecret key
+      insecure: true
+      active: true
+      contentType: json
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-events-ingress       # ingress for the webhook access
+  namespace: argo-events
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /push
+        pathType: Prefix
+        backend:
+          service:
+            name: ci-eventsource-svc        # the backend service name created by the event source
+            port:
+              number: 12000
+
+# Use if the ingress is connecting out of Docker network
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress                                  # ingress
+# metadata:
+#   name: argo-demo-ingress
+#   namespace: argo-events
+# spec:
+#   ingressClassName: nginx
+#   rules:
+#   - host: argo.events                         # host name of the ingress 
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: ci-eventsource-svc          # the backend service name created by the event source
+#             port:
+#               number: 12000
+-------------------------------------------------
+
+
+
+In sensor.yaml we have configured all tasks, their templates and commands for execution.
+
+argo-events/sensor.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor                  # CRD type 
+metadata:
+  name: ci                    # sensor name
+  namespace: argo-events      # sensor namespace
+spec:
+  template:
+    serviceAccountName: operate-workflow-sa            # service account name
+  dependencies:
+    - name: ci                                         # dependency name
+      eventSourceName: ci                              # event source name
+      eventName: argo-demo                             # destination namespace
+  triggers:                                            # triggers
+    - template:
+        name: ci                                       # trigger template name                 
+        argoWorkflow:
+          operation: submit                            # operation
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1         # resource api version
+              kind: Workflow                           # resource kind
+              metadata:
+                generateName: argo-demo-               # workflow name with suffix
+              spec:
+                ttlStrategy:
+                  secondsAfterCompletion: 3600         # workflow will be deleted after 1 hour if completed
+                  secondsAfterSuccess: 3600            # workflow will be deleted after 1 hour if succeeded
+                  # secondsAfterFailure: 3600          # workflow will be deleted after 1 hour if failed - disabled fot investigation
+                arguments:
+                  parameters:
+                    - name: app-repo-url
+                      value: https://github.com/entermix123/my-app.git            # app repo for cerating webhook
+                    - name: argo-config-repo-url
+                      value: https://github.com/entermix123/argo-config.git       # argo config repo for changing the image tag
+                    - name: app-clone-dest
+                      value: /tmp/app
+                    - name: argo-config-clone-dest
+                      value: /tmp/argo-config
+                    - name: argo-config-branch
+                      value: main
+                    - name: nexus-registry
+                      value: host.docker.internal:8085              # nexus registry url
+                artifactRepositoryRef:
+                  configMap: artifact-repository                    # artifact repository   
+                entrypoint: ci
+                templates:
+                - name: ci
+                  dag:                                  # using dag template evoker
+                    tasks:
+                    - name: clone-repo-task             # task 1 name - clone the app repo
+                      template: clone-repo              # task 1 template
+                    - name: build-push-task             # task 2 name - build and push the image
+                      template: build-and-push          # task 2 template
+                      arguments:
+                        artifacts:                      # use artifact 1 from task 1
+                          - name: app-repo              # artifacts name
+                            from: "{{tasks.clone-repo-task.outputs.artifacts.app-repo}}"      # artifact 1 from task 1 path
+                      dependencies: [clone-repo-task]                                         # task 2 depends on task 1
+                    - name: update-manifest-task        # task 3 name - update the manifest
+                      template: update-manifest         # task 3 template
+                      arguments:
+                        artifacts:                      # use artifact 2 from task 1
+                          - name: argo-config-repo      # artifacts name
+                            from: "{{tasks.clone-repo-task.outputs.artifacts.argo-config-repo}}"    # artifact 2 from task 1 path
+                      dependencies: [clone-repo-task, build-push-task]                              # task 3 depends on task 1 and task 2
+                - name: clone-repo              # task 1 template
+                  outputs:
+                    artifacts:                  # output artifacts
+                    - name: app-repo            # artifacts name
+                      path: "{{workflow.parameters.app-clone-dest}}"            # artifact 1 path
+                    - name: argo-config-repo                                    # artifacts name
+                      path: "{{workflow.parameters.argo-config-clone-dest}}"    # artifact 2 path
+                  script:
+                    image: alpine/git                             # script image
+                    command: [sh]                                 # script command
+                    env:
+                      - name: APP_TOKEN                           # name of the environment variable 
+                        valueFrom:
+                          secretKeyRef:                           # secret key reference
+                            name: app-repo-credentials            # secret name
+                            key: token                            # secret key
+                      - name: CONFIG_TOKEN                        # name of the environment variable
+                        valueFrom:
+                          secretKeyRef:                           # secret key reference
+                            name: config-repo-credentials         # secret name
+                            key: token                            # secret key
+                    source: |
+                      # Clone using GitHub token authentication
+                      git clone https://entermix123:${APP_TOKEN}@github.com/entermix123/my-app.git {{workflow.parameters.app-clone-dest}}
+                      git clone https://entermix123:${CONFIG_TOKEN}@github.com/entermix123/argo-config.git {{workflow.parameters.argo-config-clone-dest}}
+                - name: build-and-push                                  # task 2 template
+                  inputs:
+                    artifacts:                                          # input artifacts
+                    - name: app-repo                                    # artifacts name
+                      path: "{{workflow.parameters.app-clone-dest}}"    # artifact 1 path - app image
+                  volumes:
+                    - name: docker-config-secret                        # use secret for docker config to access Neus registry
+                      secret:
+                        secretName: docker-config-secret                # secret name
+                  container:
+                    readinessProbe:                                     # container readiness probe for building the image
+                      exec:
+                        command: [ sh, -c, "buildctl debug workers" ]
+                    image: moby/buildkit:v0.9.3-rootless
+                    volumeMounts:
+                      - name: docker-config-secret
+                        mountPath: /.docker
+                    workingDir: "{{workflow.parameters.app-clone-dest}}"
+                    env:
+                      - name: BUILDKITD_FLAGS
+                        value: --oci-worker-no-process-sandbox
+                      - name: DOCKER_CONFIG
+                        value: /.docker
+                    command:
+                      - buildctl-daemonless.sh
+                    args:
+                      - build
+                      - --frontend
+                      - dockerfile.v0
+                      - --local
+                      - context=.
+                      - --local
+                      - dockerfile=.
+                      - --output
+                      - type=image,name={{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}},push=true,registry.insecure=true
+                    securityContext:
+                      privileged: true
+                - name: update-manifest                                             # task 3 template
+                  inputs:
+                    artifacts:                                                      # input artifacts
+                      - name: argo-config-repo                                      # artifact 2 from task 1 - changed image tag
+                        path: "{{workflow.parameters.argo-config-clone-dest}}"      # artifact 2 path
+                  script:
+                    image: alpine/git                                               # script image
+                    workingDir: "{{workflow.parameters.argo-config-clone-dest}}/argo-rollouts"      # script working directory
+                    command: [sh]
+                    env:                              # use environment variables
+                      - name: GITHUB_USERNAME         # name of the environment variable
+                        valueFrom:
+                          secretKeyRef:                       # secret key reference
+                            name: config-repo-credentials     # secret name
+                            key: username                     # secret key
+                      - name: GITHUB_TOKEN                    # name of the environment variable
+                        valueFrom:
+                          secretKeyRef:
+                            name: config-repo-credentials     # secret name
+                            key: token                        # secret key
+                    source: |
+                      sed -i 's|image: host.docker.internal:8085/argo-demo/nginx:.*|image: {{workflow.parameters.nexus-registry}}/argo-demo/nginx:{{workflow.uid}}|' nginx-rollouts.yaml
+                      git config user.name "$GITHUB_USERNAME"
+                      git config user.email "your-email@example.com"
+                      git add .
+                      git commit -m "Update image tag to {{workflow.uid}}"
+                      
+                      # Push using GitHub token authentication
+                      git remote set-url origin https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/entermix123/argo-config.git
+                      git push origin {{workflow.parameters.argo-config-branch}}
+-------------------------------------------------
+
+
+
+
+
+CANARY ANALYSIS
+---------------
+
+|--canary-analysis
+   |--analysis-app
+   |   |-- analysis-app.py
+   |   |-- Dockerfile
+   |
+   |-- camary-analysis.yaml
+   |-- web-analysis-depoyment.yaml
+
+
+
+We will use simple flask analysis application to test the main application accessability.
+
+We will create analysis application image and deploy it in separate namespace so we don't mix applications deployments.
+
+
+Analysis Application resources
+	- analysis-app.py
+	- Dockerfile
+
+analysis-app.py
+-------------------------------------------------
+### WE are using a flask script to get the url of the application and try to connect to it 5 times at 5 seconds intervals and returns one of the true or false values based on "200 response_code" in a json format, if the success_rate is 80% or more , it returns "true" value, Otherwise it returns "false" value
+from flask import Flask, request, jsonify
+import requests, time
+
+app = Flask(__name__)
+
+@app.route('/measure_success_rate', methods=['POST'])
+def measure_success_rate():
+    url = request.json.get('url')
+
+    if not url:
+        return jsonify({'error': 'URL is missing in the request body'}), 400
+
+    success_count = 0
+
+    for _ in range(5):
+        try:
+            response = requests.get(url)
+        except requests.exceptions.RequestException:
+            pass
+        else:
+            if response.status_code == 200:
+                success_count += 1
+        time.sleep(5)
+        
+    success_rate = (success_count / 5) * 100
+    if int(success_rate) >= 80:
+        return jsonify({'data': {'ok': 'true'}})
+    else:
+        return jsonify({'data': {'ok': 'false'}})
+
+if __name__ == '__main__':
+    # Run on all interfaces so it's accessible within the cluster
+    app.run(host='0.0.0.0', port=5001)
+-------------------------------------------------
+
+
+Dockrfile
+-------------------------------------------------
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Install required Python packages
+RUN pip install flask requests
+
+# Copy the Flask app
+COPY analysis-app.py .
+
+# Expose the port
+EXPOSE 5001
+
+# Run the Flask app
+CMD ["python", "analysis-app.py"]
+-------------------------------------------------
+
+
+We will deploy cluster analysis template canary-analysis.yaml so it can be used across different namespaces.
+
+canary-analysis.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterAnalysisTemplate       # Set the template as a ClusterAnalysisTemplate, no namespace configured
+metadata:
+  name: success-rate
+spec:
+  args:
+  - name: service_port      # This is the variable related to the ip address where the analysis-app.py is located
+    value: "5001"           # port of the analysis app
+    # WE are using a flask script to get the url of the application and try to connect to it 5 times at 5 seconds intervals and returns one of the true or 
+    # false values based on "200 response_code" in a json format, if the success_rate is 80% or more , it returns "true" value, Otherwise it returns "false" value,
+    # you can find this simple app in the current directory (its name is analysis-app.py).
+  metrics:
+  - name: success-rate
+    successCondition: result == "true"
+    provider:
+      web:
+        method: POST
+        # Use Kubernetes service DNS name instead of external IP
+        url: "http://web-analysis.canary-analysis.svc.cluster.local:{{args.service_port}}/measure_success_rate"
+        timeoutSeconds: 50
+        headers:
+          - key: Content-Type             # if body is a json, it is recommended to set the Content-Type
+            value: "application/json"
+        jsonBody:                         # If using jsonBody Content-Type header will be automatically set to json
+          url: "http://nginx-service.argo-demo.svc.cluster.local:8080"   # this is the url of the application svc with local docker address
+        jsonPath: "{$.data.ok}"
+-------------------------------------------------
+
+
+
+Create deployment for the analysis app.
+
+web-analysis-deployment.yaml
+-----------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-analysis
+  namespace: canary-analysis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-analysis
+  template:
+    metadata:
+      labels:
+        app: web-analysis
+    spec:
+      containers:
+      - name: web-analysis
+        image: web-analysis
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 5001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-analysis
+  namespace: canary-analysis
+spec:
+  selector:
+    app: web-analysis
+  ports:
+  - protocol: TCP
+    port: 5001
+    targetPort: 5001
+  type: ClusterIP
+-----------------------------------------------
+
+
+
+
+
+ARGO-ROLLOUTS
+-------------
+
+|--argo-rollouts
+   |-- nginx-ingress.yaml
+   |-- nginx-rollouts.yaml
+   |-- webhook-ingress.yaml
+
+
+In nginx-rollouts.yaml CRD we set the type and the steps of the deployment. We will use canaty deployment withe 4 We use also web-analysis as inline analysis.
+
+argo-rollouts/nginx-rollouts.yaml
+-------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: nginx-rollouts
+  namespace: argo-demo
+spec:
+  revisionHistoryLimit: 5               # Keep only last 5 revisions (default is 10)
+  replicas: 5
+  strategy:
+    canary:
+      steps:
+      - setWeight: 20                   # first step is 20% of the traffic - 1 of 5 pods
+      - pause: {}                       # manual promotion required
+      - analysis:                           # This is an Inline Analysis
+          templates:
+          - templateName: success-rate
+            clusterScope: true          # using a cluster-scoped AnalysisTemplate (deployed in another namespace)
+          args:
+          - name: service_port              # This is the variable related to the port of analysis-app.py flask app
+            value: "5001"
+      - setWeight: 40                   # second step is 40% of the traffic - 2 of 5 pods
+      - pause: {duration: 10s}          # auto promotion afer 10 seconds
+      - setWeight: 60                   # third step is 60% of the traffic - 3 of 5 pods
+      - pause: {duration: 20s}          # auto promotion afer 20 seconds
+      - setWeight: 80                   # fourth step is 80% of the traffic - 4 of 5 pods
+      - pause: {duration: 1m}           # auto promotion afer 1 minute
+  selector:
+    matchLabels:
+      app: nginx-rollouts
+  template:
+    metadata:
+      labels:
+        app: nginx-rollouts
+    spec:
+      containers:
+      - name: nginx-rollouts
+        image: host.docker.internal:8085/argo-demo/nginx:abb6283a-a528-47d3-bbd2-2193447b5a1c
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  ports:
+  - port: 8080
+    targetPort: 80
+  selector:
+    app: nginx-rollouts
+-------------------------------------------------
+
+
+
+We use webhook ingress for GitHub webhooks to reach our EventSource and trigger workflows. Without it, there's no network path from GitHub to your EventSource pod.
+
+argo-rollouts/webhook-ingress.yaml
+-----------------------------------------------
+# This ingress is matching the Docker internal network with exact path
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argo-events-ingress
+  namespace: argo-events
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /push
+        pathType: Exact
+        backend:
+          service:
+            name: ci-eventsource-svc
+            port:
+              number: 12000
+-----------------------------------------------
+
+
+This is the ingress that exposes our application locally and we can access it on http://argo.demo:32073/
+
+argo-rollouts/nginx-ingress.yaml
+-------------------------------------------------
+# Use if the ingress is connecting out of Docker network
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nginx-ingress
+  namespace: argo-demo
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: argo.demo
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nginx-service
+            port:
+              number: 8080
+-------------------------------------------------
+
+
+Add host address to Windows host list
+	- Open PowerShell as Admin
+		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
+		- add '127.0.0.1 argo-demo'
+		- save the file and exit
+
+Add host address to Linux host list
+	terminal --> sudo vim /etc/hosts
+	- Add '127.0.0.1 argo-demo'
+	- save changes and exit - escape, :wq!, enter
+
+After the rollout is created the app should be accessabel on http://argo.demo:32073/
+
+
+
+DEPLOY ARGOCD SETUP
+-------------------
+
+Deploy analysis application
+---------------------------
+
+1. Build and load analysis appplycation on the cluster
+	Navigate to the canary-analysis\analysis-app folder and build the image
+		trminal --> docker build -t web-analysis .
+
+	Load the image into the cluster
+		terminal --> kind load docker-image web-analysis --name kind
+
+
+2. Create canary-analysis namespace
+	terminal --> k create ns canary-analysis
+
+	# result: namespace/canary-analysis created
+
+
+3. Deply the analysis CRD in the 'canary-analysis' namespace
+	terminal --> k apply -f canary-analysis.yaml
+
+	# result: clusteranalysistemplate.argoproj.io/success-rate created
+
+4. Apply the analysis deployment
+	terminal --> k apply -f web-analysis-deployment.yaml -n canary-analysis
+
+	# result:
+	deployment.apps/web-analysis created
+	service/web-analysis created
+
+5. Check if the serice is running
+	terminal --> kubectl get pods -n canary-analysis -l app=web-analysis
+
+	# result:
+	NAME                            READY   STATUS    RESTARTS   AGE
+	web-analysis-5f9bc64f67-2tgn6   1/1     Running   0          6m29s
+
+
+
+GENERATE GITHUB CREDENTIALS
+---------------------------
+
+We need to provide GitHub credentials to our workflow to access the application repository and manage it - clone it, make changes to the manifests etc.
+
+Login to GitHub - https://github.com/
+Go to https://github.com/settings/tokens
+	- Generate New Token (classic)
+		- Name: argo-workflows
+		- Scope
+			- repo - Full control of private repositories 
+			- workflow - Update GitHub Action workflows (Optional)
+		- Generate Token
+	- Copy the value (save it safe temporary)
+
+Create local environment variables with GitHub Username and Token
+	terminal --> $GITHUB_USERNAME = "git_username"			# set your username
+	terminal --> $GITHUB_TOKEN = "generated_token"			# set the token
+
+Test the creation of the environment cariables
+	terminal --> echo $GITHUB_USERNAME
+	terminal --> echo $GITHUB_TOKEN
+
+
+GIVE ARGOCD ACCESS TO GITHUB REPO
+---------------------------------
+
+Create secret for GitLab repository access
+	terminal --> kubectl create secret generic argocd-github-repo --from-literal=username=$GITHUB_USERNAME --from-literal=password=$GITHUB_TOKEN --from-literal=url=https://github.com/entermix123/argo-config.git -n argocd
+
+Label it so ArgoCD recognizes it as a repository credential
+	terminal --> kubectl label secret argocd-github-repo argocd.argoproj.io/secret-type=repository -n argocd
+
+Check if the repository is added successfully in ArgoCD UI - https://argocd.localhost:32074/settings/repos
+
+
+
+
+
+Create secret for workflow task in the next step in the same terminal session else the envs will be deleted and the access will be denied.
+
+We will use the environment variables to create secrets objects in our Kubernetes cluster and set them in the workflow.
+
+CREATE SECRETS FOR GITHUB CREDENTAILS IN THE SAME SHELL SESSION
+---------------------------------------------------------------
+
+1. Generate 20 random bytes and convert to hex string and save it in environemnt variable
+	terminal --> $bytes = New-Object byte[] 20
+[Security.Cryptography.RNGCryptoServiceProvider]::Create().GetBytes($bytes)
+$WEBHOOK_SECRET = ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
+
+2. Check the env variable
+	terminal --> echo $WEBHOOK_SECRET
+
+3. Create webhook secret in 'argo-events' namespace
+	terminal --> kubectl create secret generic github-webhook-secret --from-literal=webhook-secret=$WEBHOOK_SECRET -n argo-events
+
+	# result: secret/github-webhook-secret created
+
+
+4. Create secret in 'argo-events' namespace to use GitHub credentials to access the app repostiory
+	terminal --> kubectl create secret generic config-repo-credentials --from-literal=token=$GITHUB_TOKEN --from-literal=username=$GITHUB_USERNAME -n argo-events
+	
+	# result: secret/config-repo-credentials created
+
+
+4. Create secret in 'argo-events' namespace to use GitHub credentials to access the argo-config repostiory
+	terminal --> kubectl create secret generic app-repo-credentials --from-literal=token=$GITHUB_TOKEN -n argo-events
+	
+	# result: secret/app-repo-credentials created
+
+
+
+
+
+
+
+DEPLOY ARGO CRDs
+----------------
+
+1. Start the ngrok
+	terminal --> ngrok http 32073
+
+2. Update event-source.yaml with ngrok URL
+
+event-source.yaml
+-------------------------------------------------
+...
+      webhook:
+        endpoint: /push
+        port: "12000"
+        url: http://$OUR_PUBLIC_DOMAIN 				# set the exposed domain       
+...
+-------------------------------------------------
+
+
+Apply the updated manifests
+	terminal --> kubectl apply -f event-source.yaml -n argo-events
+
+	# result:
+	eventsource.argoproj.io/ci created
+	ingress.networking.k8s.io/argo-events-ingress created
+
+Apply the event source CRD
+	terminal --> kubectl apply -f sensor.yaml -n argo-events
+
+	# result: sensor.argoproj.io/ci created
+
+Apply the sensor CRD
+	terminal --> kubectl apply -f argo-app.yaml
+
+	# result: application.argoproj.io/argo-demo-application created
+
+
+Check if in the GitHub my-app repository webhook was created.
+
+
+We can access ArgoCD - https://argocd.localhost:32074/
+We can Access Argo Rollouts - http://rollouts.localhost:32073/rollouts/			# set argo-demo namespace
+We can access Argo Workflows - https://argo-workflows.localhost:32074/workflows/	# set 'argo-events' namespace
+We can access MinIO - http://minio.localhost:32073/browser
+We can access Nexus - http://localhost:8081/#browse/browse
+
+After the application is deployed we can access it on http://argo.demo:32073/
+
+
+
+MAKE A CHANGE
+-------------
+
+When we create and push change to our app
+
+index.html
+-------------------------------------------------
+    <div class="container">
+        <h1>Welcome to My Website, Version 2.0</h1>
+    </div>
+-------------------------------------------------
+# from '1.0' to '2.0' - changed subversion
+
+Commit changes
+	terminal --> git add .
+	terminal --> git commit -m "version 2"
+ 	terminal --> git push
+
+
+The change in the repostiory will trigger the webhook and new workflow will start.
+
+After the workflow finishes the used image will be changed in the rollout.
+The application will autoamtic sync after 3 minutes.
+The application will start update (canary deployment will start).
+
+We can fooolow the rollout and promote the first step on http://rollouts.localhost:32073/rollouts/ or with Argo UI in the argo-demo namepsace.
+	terminal --> kargo promote nginx-rollouts -n argo-demo
+
+	# result: rollout 'nginx-rollouts' promoted
+
+After the rollout is finished and the application is running with the new version we can test it on http://argo.demo:32073/
+We should see message 'Welcome to My Website, Version 2.0'
+
+
+
+
+TROUBLESHOOTING COMMANDS
+------------------------
+
+Check event source status
+	terminal --> kubectl get eventsources -n argo-events
+	terminal --> kubectl describe eventsource ci -n argo-events
+
+Check sensor status
+	terminal --> kubectl get sensors -n argo-events
+	terminal --> kubectl describe sensor ci -n argo-events
+
+Check event source logs
+	terminal --> kubectl logs -n argo-events -l eventsource-name=ci
+
+Check sensor logs
+	terminal --> kubectl logs -n argo-events -l sensor-name=ci
+
+Manually trigger to test (without webhook)
+	terminal --> kubectl create -f - <<EOF
+apiVersion: v1
+kind: Event
+metadata:
+  name: test-event
+  namespace: argo-events
+EOF
+
+
+
+
+
+
+
+
+
+
+
+24. Install ESO (External Secret Operator) with Helm
+====================================================
+
+We will install ESO (External Secret Operator) with Helm on Docker Kind Cluster
+
+Add ESO Helm repository and Update Helm repos
+	terminal --> helm repo add external-secrets https://charts.external-secrets.io
+	terminal --> helm repo update
+
+
+Install External Secrets Operator
+	terminal --> helm install external-secrets external-secrets/external-secrets -n external-secrets-system --create-namespace --set installCRDs=true
+
+
+Verify installation
+	terminal --> kubectl get pods -n external-secrets-system
+
+	**Expected output:**
+	```
+	NAME                                                READY   STATUS    RESTARTS   AGE
+	external-secrets-xxxxx                              1/1     Running   0          30s
+	external-secrets-cert-controller-xxxxx              1/1     Running   0          30s
+	external-secrets-webhook-xxxxx                      1/1     Running   0          30s
+
+
+
+Configure GitHub Access for ESO
+-------------------------------
+
+This is the only manual secret you'll create - it allows ESO to authenticate with GitHub:
+
+Create the bootstrap secret for GitHub authentication
+	terminal --> kubectl create secret generic github-token --from-literal=token=YOUR_GITHUB_PERSONAL_ACCESS_TOKEN -n external-secrets-system
+
+
+
+
+
+
 
 
 
