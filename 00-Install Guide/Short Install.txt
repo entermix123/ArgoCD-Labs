@@ -866,7 +866,6 @@ To prevent usage of the domain in by external requests we will set additional we
 
 
 
-
 Deploy analysis application
 ---------------------------
 
@@ -907,6 +906,243 @@ Deploy analysis application
 
 
 
+Install ESO (External Secret Operator) with Helm
+================================================
+
+We will install ESO (External Secret Operator) with Helm on Docker Kind Cluster
+
+Add ESO Helm repository and Update Helm repos
+	terminal --> helm repo add external-secrets https://charts.external-secrets.io
+
+	# result: "external-secrets" has been added to your repositories
+
+	terminal --> helm repo update
+
+	# result: Update Complete. ⎈Happy Helming!⎈
+
+
+Install External Secrets Operator
+	terminal --> helm install external-secrets external-secrets/external-secrets -n external-secrets-system --create-namespace --set installCRDs=true --set crds.createClusterExternalSecret=true --set crds.createClusterSecretStore=true --set crds.createPushSecret=true
+
+Wait 30 seconds and confirm pods to be ready
+	terminal --> kubectl get pods -n external-secrets-system
+
+	**Expected output:**
+	```
+	NAME                                                READY   STATUS    RESTARTS   AGE
+	external-secrets-xxxxx                              1/1     Running   0          30s
+	external-secrets-cert-controller-xxxxx              1/1     Running   0          30s
+	external-secrets-webhook-xxxxx                      1/1     Running   0          30s
+
+
+
+Create GitHub Personal Access Token
+-----------------------------------
+1. Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. Click "Generate new token (classic)"
+3. Configure:
+	- Note: ESO Access Token
+	- Expiration: 1 year (or no expiration for testing)
+	- Scopes: Check repo (full control of private repositories)
+	- Generate token
+
+Create a secret with the GitHub token for ESO to authenticate
+	terminal --> kubectl create secret generic github-eso-auth --from-literal=token=ghp_your_eso_token_here -n argo-events
+
+
+Also create in argocd namespace
+	terminal --> kubectl create secret generic github-eso-auth --from-literal=token=ghp_your_eso_token_here -n argocd
+
+
+
+SET ESO MANAGED SECRETS
+-----------------------
+
+We need to set secret for with local Nexus registry creadentials so the workflow can pull and push images.
+
+1. Encode Nexus user and password with shell - example credentials
+	terminal --> $auth = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("admin:admin123"))
+$auth
+	result: YWRtaW46YWRtaW4xMjM=
+
+2. Set docker cofig in json format where we set our Nexus registry url and encoded credrntials:
+	- {"auths":{"host.docker.internal:8085":{"auth":"YWRtaW46YWRtaW4xMjM="}}}
+
+
+3. Generate 20 random bytes and convert to hex string and save it in environemnt variable
+	terminal --> $bytes = New-Object byte[] 20
+[Security.Cryptography.RNGCryptoServiceProvider]::Create().GetBytes($bytes)
+$WEBHOOK_SECRET = ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
+echo $WEBHOOK_SECRET
+
+	# result: xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+
+
+Install OpenBao Secret Management Server
+==============================================
+
+
+Create volume folders
+	terminal --> New-Item -Path "D:\repos\OpenBao\data" -ItemType Directory -Force
+	terminal --> New-Item -Path "D:\repos\OpenBao\config" -ItemType Directory -Force
+
+Create the config file
+	shell terminal --> 
+@"
+storage "file" {
+  path = "/openbao/data"
+}
+listener "tcp" {
+  address     = "0.0.0.0:8200"
+  tls_disable = 1
+}
+api_addr = "http://0.0.0.0:8200"
+ui = true
+"@ | Out-File -FilePath D:\repos\OpenBao\config\openbao-config.hcl -Encoding ASCII
+
+
+Production config with HTTPS
+-------------------------------------------------------
+storage "file" {
+  path = "/openbao/data"
+}
+
+listener "tcp" {
+  address       = "0.0.0.0:8200"
+  tls_disable   = 0  # Enable TLS
+  tls_cert_file = "/openbao/config/cert.pem"
+  tls_key_file  = "/openbao/config/key.pem"
+}
+
+api_addr = "https://your-domain.com:8200"
+ui = true
+-------------------------------------------------------
+
+
+Start OpenBao container
+	shell terminal --> docker run -d --name openbao -p 8200:8200 -e BAO_ADDR='http://127.0.0.1:8200' -v D:\repos\OpenBao\data:/openbao/data -v D:\repos\OpenBao\config:/openbao/config --cap-add=IPC_LOCK quay.io/openbao/openbao:latest server "-config=/openbao/config/openbao-config.hcl"
+
+
+Initialize OpenBao
+	terminal --> docker exec -it openbao bao operator init
+
+	# result:
+	Unseal Key 1: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	Unseal Key 2: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	Unseal Key 3: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	Unseal Key 4: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	Unseal Key 5: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+	Initial Root Token: xxxxxxxxxxxxxxxxxxxxxxxxxx			# copy this token
+
+
+Login to http://localhost:8200/
+	- Login every time we restart the container !!!
+	- add Unseal Key 1, Unseal Key 2, Unseal Key 3 and Initial Root Token
+
+
+Enable the KV secrets engine in OpenBao
+---------------------------------------
+
+Login to OpenBao
+	terminal --> docker exec -it openbao bao login
+
+Enable KV v2 secrets engine
+	terminal --> docker exec -it openbao bao secrets enable -path=secret kv-v2
+
+
+⚠️ IMPORTANT: Every time you restart the OpenBao container, you must unseal it again:
+	terminal --> docker exec -it openbao bao operator unseal <key1>
+	terminal --> docker exec -it openbao bao operator unseal <key2>
+	terminal --> docker exec -it openbao bao operator unseal <key3>
+
+Then you can login with your root token at http://localhost:8200
+
+
+
+Store all your secrets in OpenBao
+	terminal --> docker exec -it openbao bao kv put secret/github-creds USERNAME_GITHUB=entermix123
+USER_TOKEN_GITHUB=ghp_your_pat_token APP_TOKEN_GITHUB=ghp_your_pat_token CONFIG_TOKEN_GITHUB=ghp_your_pat_token REPO_URL_GITHUB=https://github.com/entermix123/argo-config.git DOCKER_CONFIG_JSON="{\`"auths\`":{\`"host.docker.internal:8085\`":{\`"auth\`":\`"YWRtaW46YWRtaW4xMjM=\`"}}}" WEBHOOK_SECRET_GITHUB=your_webhook_secret MINIO_ACCESS_KEY=admin MINIO_SECRET_KEY=MinIOPass
+
+⚠️ Add your tokens and secrets
+
+
+
+Create the policy directly in the container using a here-document
+	terminal --> 
+@"
+path "secret/data/github-creds" {
+  capabilities = ["read"]
+}
+"@ | Out-File -FilePath "$env:TEMP\eso-policy.hcl" -Encoding ASCII -NoNewline
+
+
+Copy it to the container
+	terminal --> docker cp "$env:TEMP\eso-policy.hcl" openbao:/tmp/eso-policy.hcl
+
+	# result: Successfully copied 2.05kB to openbao:/tmp/eso-policy.hcl
+
+Apply the policy
+	terminal --> docker exec -it openbao bao policy write eso-policy /tmp/eso-policy.hcl
+
+	# result: Success! Uploaded policy: eso-policy
+
+
+Enable AppRole authentication and create a role for ESO
+	terminal --> docker exec -it openbao bao auth enable approle
+
+	# result: Success! Enabled approle auth method at: approle/
+
+Create AppRole for ESO
+	terminal --> docker exec -it openbao bao write auth/approle/role/eso token_policies=eso-policy token_ttl=1h token_max_ttl=4h
+
+	# result: Success! Data written to: auth/approle/role/eso
+
+Get Role ID
+	terminal --> docker exec -it openbao bao read auth/approle/role/eso/role-id
+
+	# result: 
+	Key        Value
+	---        -----
+	role_id    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx				# SAVE ROLE ID
+
+
+Get Secret ID
+	terminal --> docker exec -it openbao bao write -f auth/approle/role/eso/secret-id
+
+	# result:
+	Key                   Value
+	---                   -----
+	secret_id             xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx		# SAVE SECRET ID
+	secret_id_accessor    xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+	secret_id_num_uses    0
+	secret_id_ttl         0s
+
+
+Create Kubernetes secrets with OpenBao credentials
+	terminal --> kubectl create secret generic openbao-approle --from-literal=role-id=<your-role-id> --from-literal=secret-id=<your-secret-id> -n argo-events
+
+	terminal --> kubectl create secret generic openbao-approle --from-literal=role-id=<your-role-id> --from-literal=secret-id=<your-secret-id> -n argocd
+
+
+
+Troubleshooting
+---------------
+
+If ExternalSecrets show "SecretSyncedError":
+1. Check SecretStore status:
+	terminal --> kubectl describe secretstore openbao-secret-store -n argo-events
+
+2. Check OpenBao is unsealed:
+	terminal --> docker exec -it openbao bao status
+
+3. Force ExternalSecret refresh:
+	terminal --> kubectl delete externalsecret <name> -n <namespace>
+	terminal --> kubectl apply -f external-secrets/<file>.yaml
+
+4. Check ESO operator logs:
+	terminal --> kubectl logs -n external-secrets-system -l app.kubernetes.io/name=external-secrets --tail=50
 
 
 
@@ -916,6 +1152,411 @@ Deploy analysis application
 
 
 
+
+
+
+
+
+DEPLOY ARGO CRDs IF NOT AND TEST THE SETUP
+------------------------------------------
+
+1. Start the ngrok
+	terminal --> ngrok http 32073
+
+2. Update event-source.yaml with ngrok URL
+
+event-source.yaml
+-------------------------------------------------
+...
+      webhook:
+        endpoint: /push
+        port: "12000"
+        url: http://$OUR_PUBLIC_DOMAIN 				# set the exposed domain       
+...
+-------------------------------------------------
+
+Apply the updated manifests
+	terminal --> kubectl apply -f event-source.yaml -n argo-events
+
+	# result:
+	eventsource.argoproj.io/ci created
+	ingress.networking.k8s.io/argo-events-ingress created
+
+Apply the event source CRD
+	terminal --> kubectl apply -f sensor.yaml -n argo-events
+
+	# result: sensor.argoproj.io/ci created
+
+Apply the sensor CRD
+	terminal --> kubectl apply -f argo-app.yaml
+
+	# result: application.argoproj.io/argo-demo-application created
+
+
+Check if in the GitHub my-app repository webhook was created.
+
+
+We can access ArgoCD - https://argocd.localhost:32074/
+We can Access Argo Rollouts - http://rollouts.localhost:32073/rollouts/			# set argo-demo namespace
+We can access Argo Workflows - https://argo-workflows.localhost:32074/workflows/	# set 'argo-events' namespace
+We can access MinIO - http://minio.localhost:32073/browser
+We can access Nexus - http://localhost:8081/#browse/browse
+We can access OpenBao - http://localhost:8200/
+
+After the application is deployed we can access it on http://argo.demo:32073/
+
+
+
+
+
+Backup Docker Desktop Kind clustr
+=====================================
+
+
+IMPORTANT: Your cluster uses GitOps with ArgoCD, so most resources are in Git.
+This backup focuses on: cluster state, secrets, and configuration not in Git.
+
+
+Prerequisites
+-------------
+Your Git repositories should be backed up separately:
+- argo-config repository (all ArgoCD manifests)
+- my-app repository (application code)
+
+
+Part 1: Backup Git Repositories
+================================
+
+Backup your Git repos (most important!)
+	terminal --> cd D:\repos
+	terminal --> git clone https://github.com/entermix123/argo-config.git argo-config-backup
+	terminal --> git clone https://github.com/entermix123/my-app.git my-app-backup
+
+Or create archives
+	terminal --> Compress-Archive -Path D:\repos\argo-config -DestinationPath D:\backups\argo-config-$(Get-Date -Format 'yyyy-MM-dd').zip
+	terminal --> Compress-Archive -Path D:\repos\my-app -DestinationPath D:\backups\my-app-$(Get-Date -Format 'yyyy-MM-dd').zip
+
+
+Part 2: Backup Kind Cluster Configuration
+==========================================
+
+Save Kind cluster config
+	terminal --> kind get clusters
+	# result: kind
+
+Export kubeconfig
+	terminal --> kind export kubeconfig --name kind
+	# saved at C:\Users\your-user\.kube\config
+	terminal --> Copy-Item C:\Users\$env:USERNAME\.kube\config D:\backups\kubeconfig-$(Get-Date -Format 'yyyy-MM-dd').yaml
+
+
+Part 3: Backup Critical Secrets and State
+==========================================
+
+Create backup directory
+	terminal --> New-Item -Path "D:\backups\cluster-backup-$(Get-Date -Format 'yyyy-MM-dd')" -ItemType Directory -Force
+	terminal --> cd D:\backups\cluster-backup-$(Get-Date -Format 'yyyy-MM-dd')
+
+1. Backup OpenBao data and config
+	terminal --> Copy-Item -Path D:\repos\OpenBao -Destination .\OpenBao -Recurse
+	
+	# Also backup OpenBao unseal keys and root token (CRITICAL!)
+	# Store these in a secure location (password manager, encrypted file)
+
+2. Backup ArgoCD initial admin password
+	terminal --> kubectl get secret argocd-initial-admin-secret -n argocd -o yaml > argocd-admin-secret.yaml
+
+3. Backup ArgoCD applications state
+	terminal --> kubectl get applications -n argocd -o yaml > argocd-applications.yaml
+
+4. Backup namespaces
+	terminal --> kubectl get namespaces -o yaml > namespaces.yaml
+
+5. Backup PersistentVolumes and PersistentVolumeClaims
+	terminal --> kubectl get pv,pvc --all-namespaces -o yaml > persistent-volumes.yaml
+
+6. Backup custom CRDs (if any not managed by Helm)
+	terminal --> kubectl get crd -o yaml > custom-crds.yaml
+
+7. Backup Ingress configurations
+	terminal --> kubectl get ingress --all-namespaces -o yaml > ingress.yaml
+
+8. Backup ESO/OpenBao AppRole secrets (CRITICAL!)
+	terminal --> kubectl get secret openbao-approle -n argo-events -o yaml > openbao-approle-argo-events.yaml
+	terminal --> kubectl get secret openbao-approle -n argocd -o yaml > openbao-approle-argocd.yaml
+
+9. Backup any secrets NOT managed by ESO
+	terminal --> kubectl get secrets --all-namespaces -o yaml > all-secrets.yaml
+	
+	# WARNING: This contains sensitive data. Encrypt or store securely!
+
+
+Part 4: Backup Helm Releases
+=============================
+
+List all Helm releases
+	terminal --> helm list --all-namespaces
+
+Export Helm release values
+	terminal --> helm get values argocd -n argocd > helm-argocd-values.yaml
+	terminal --> helm get values external-secrets -n external-secrets-system > helm-eso-values.yaml
+	terminal --> helm get values argo-events -n argo-events > helm-argo-events-values.yaml
+	terminal --> helm get values argo-workflows -n argo-events > helm-argo-workflows-values.yaml
+	terminal --> helm get values argo-rollouts -n argo-rollouts > helm-argo-rollouts-values.yaml
+
+
+Part 5: Document Current State
+===============================
+
+Document installed versions
+	terminal --> @"
+# Cluster State - $(Get-Date -Format 'yyyy-MM-dd HH:mm')
+
+## Helm Charts
+$(helm list --all-namespaces | Out-String)
+
+## Docker Images
+$(kubectl get pods --all-namespaces -o jsonpath='{range .items[*]}{.spec.containers[*].image}{"\n"}{end}' | Sort-Object -Unique | Out-String)
+
+## Nodes
+$(kubectl get nodes -o wide | Out-String)
+
+## ArgoCD Apps
+$(kubectl get applications -n argocd | Out-String)
+
+## ExternalSecrets
+$(kubectl get externalsecrets -A | Out-String)
+"@ | Out-File cluster-state.txt
+
+
+Part 6: Create Complete Backup Archive
+=======================================
+
+	terminal --> $backupDate = Get-Date -Format 'yyyy-MM-dd'
+	terminal --> Compress-Archive -Path "D:\backups\cluster-backup-$backupDate\*" -DestinationPath "D:\backups\complete-backup-$backupDate.zip"
+
+	# Result: All critical data in one archive
+
+
+===============================================================================
+RESTORE PROCESS
+===============================================================================
+
+Part 1: Prerequisites
+=====================
+
+1. Ensure Git repositories are available
+2. Have OpenBao unseal keys and root token ready
+3. Have backup files accessible
+
+
+Part 2: Recreate Kind Cluster
+==============================
+
+Delete old cluster (if exists)
+	terminal --> kind delete cluster --name kind
+
+Create new cluster with same config
+	terminal --> kind create cluster --config D:\repos\argo-demo-github\kind-config.yaml
+
+Verify cluster
+	terminal --> kubectl cluster-info
+	terminal --> kubectl get nodes
+
+
+Part 3: Install Core Components (in order)
+===========================================
+
+1. Install ArgoCD
+	terminal --> helm repo add argo https://argoproj.github.io/argo-helm
+	terminal --> helm repo update
+	terminal --> helm install argocd argo/argo-cd -n argocd --create-namespace -f helm-argocd-values.yaml
+
+	Wait for ArgoCD to be ready
+	terminal --> kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
+
+2. Restore ArgoCD admin password (optional)
+	terminal --> kubectl apply -f argocd-admin-secret.yaml
+
+3. Install External Secrets Operator
+	terminal --> helm repo add external-secrets https://charts.external-secrets.io
+	terminal --> helm install external-secrets external-secrets/external-secrets -n external-secrets-system --create-namespace --set installCRDs=true
+
+4. Install Argo Events
+	terminal --> helm install argo-events argo/argo-events -n argo-events --create-namespace -f helm-argo-events-values.yaml
+
+5. Install Argo Workflows
+	terminal --> helm install argo-workflows argo/argo-workflows -n argo-events -f helm-argo-workflows-values.yaml
+
+6. Install Argo Rollouts
+	terminal --> helm install argo-rollouts argo/argo-rollouts -n argo-rollouts --create-namespace -f helm-argo-rollouts-values.yaml
+
+
+Part 4: Restore OpenBao
+=======================
+
+1. Restore OpenBao data and config
+	terminal --> Copy-Item -Path "D:\backups\cluster-backup-$backupDate\OpenBao\*" -Destination D:\repos\OpenBao -Recurse -Force
+
+2. Start OpenBao container
+	terminal --> docker run -d --name openbao -p 8200:8200 -e BAO_ADDR='http://127.0.0.1:8200' -v D:\repos\OpenBao\data:/openbao/data -v D:\repos\OpenBao\config:/openbao/config --cap-add=IPC_LOCK quay.io/openbao/openbao:latest server "-config=/openbao/config/openbao-config.hcl"
+
+3. Unseal OpenBao with your saved keys
+	terminal --> docker exec -it openbao bao operator unseal <unseal-key-1>
+	terminal --> docker exec -it openbao bao operator unseal <unseal-key-2>
+	terminal --> docker exec -it openbao bao operator unseal <unseal-key-3>
+
+4. Verify OpenBao data
+	terminal --> docker exec -it openbao bao login
+	# Enter root token
+	terminal --> docker exec -it openbao bao kv get secret/github-creds
+
+
+Part 5: Restore ESO Configuration
+==================================
+
+1. Restore OpenBao AppRole secrets
+	terminal --> kubectl apply -f openbao-approle-argo-events.yaml
+	terminal --> kubectl apply -f openbao-approle-argocd.yaml
+
+2. Apply ESO configuration from Git
+	terminal --> cd D:\repos\argo-config
+	terminal --> kubectl apply -f eso-config/secret-store.yaml
+	terminal --> kubectl apply -f eso-config/external-secrets/
+
+3. Verify ExternalSecrets are syncing
+	terminal --> kubectl get externalsecrets -A
+	# All should show "SecretSynced" and "Ready: True"
+
+
+Part 6: Restore ArgoCD Applications
+====================================
+
+ArgoCD applications will be recreated from Git automatically!
+
+1. Apply ArgoCD Application manifests
+	terminal --> cd D:\repos\argo-config
+	terminal --> kubectl apply -f argo-cd/
+
+2. Wait for ArgoCD to sync
+	terminal --> kubectl get applications -n argocd
+	
+3. Access ArgoCD UI and sync applications if needed
+	terminal --> https://argocd.localhost:32074/
+
+
+Part 7: Restore Argo Events Pipeline
+=====================================
+
+1. Apply Event Source and Sensor
+	terminal --> cd D:\repos\argo-config
+	terminal --> kubectl apply -f argo-events/
+
+2. Verify webhook ingress
+	terminal --> kubectl get ingress -n argo-events
+
+
+Part 8: Verification
+====================
+
+1. Check all namespaces
+	terminal --> kubectl get namespaces
+
+2. Check all pods are running
+	terminal --> kubectl get pods --all-namespaces
+
+3. Check ArgoCD applications
+	terminal --> kubectl get applications -n argocd
+
+4. Check ExternalSecrets
+	terminal --> kubectl get externalsecrets -A
+
+5. Check ingresses
+	terminal --> kubectl get ingress --all-namespaces
+
+6. Test access to UIs:
+	- ArgoCD: https://argocd.localhost:32074/
+	- Argo Rollouts: http://rollouts.localhost:32073/
+	- Argo Workflows: https://argo-workflows.localhost:32074/
+	- OpenBao: http://localhost:8200/
+
+
+===============================================================================
+CRITICAL FILES TO KEEP SAFE
+===============================================================================
+
+Store these in a secure, encrypted location:
+
+1. OpenBao unseal keys (5 keys) - CRITICAL!
+2. OpenBao root token - CRITICAL!
+3. OpenBao AppRole role-id and secret-id
+4. ArgoCD admin password
+5. GitHub PAT tokens
+6. Nexus credentials
+7. Complete backup archive: complete-backup-YYYY-MM-DD.zip
+
+
+===============================================================================
+BEST PRACTICES
+===============================================================================
+
+1. **Daily backups**: Automate with a PowerShell script
+2. **Version control**: Keep argo-config and my-app repos up to date
+3. **Test restores**: Regularly test the restore process
+4. **Multiple locations**: Store backups in multiple locations
+5. **Encryption**: Encrypt backup archives containing secrets
+6. **Documentation**: Update this document when cluster changes
+
+
+Automated Backup Script (Optional)
+===================================
+
+Create: D:\scripts\backup-cluster.ps1
+-------------------------------------------------
+# Automated Cluster Backup Script
+$backupDate = Get-Date -Format 'yyyy-MM-dd'
+$backupPath = "D:\backups\cluster-backup-$backupDate"
+
+# Create backup directory
+New-Item -Path $backupPath -ItemType Directory -Force
+cd $backupPath
+
+# Backup Git repos
+git clone https://github.com/entermix123/argo-config.git
+git clone https://github.com/entermix123/my-app.git
+
+# Backup OpenBao
+Copy-Item -Path D:\repos\OpenBao -Destination .\OpenBao -Recurse
+
+# Backup K8s resources
+kubectl get secret argocd-initial-admin-secret -n argocd -o yaml > argocd-admin-secret.yaml
+kubectl get applications -n argocd -o yaml > argocd-applications.yaml
+kubectl get secret openbao-approle -n argo-events -o yaml > openbao-approle-argo-events.yaml
+kubectl get secret openbao-approle -n argocd -o yaml > openbao-approle-argocd.yaml
+kubectl get namespaces -o yaml > namespaces.yaml
+kubectl get pv,pvc --all-namespaces -o yaml > persistent-volumes.yaml
+kubectl get ingress --all-namespaces -o yaml > ingress.yaml
+
+# Backup Helm values
+helm get values argocd -n argocd > helm-argocd-values.yaml
+helm get values external-secrets -n external-secrets-system > helm-eso-values.yaml
+helm get values argo-events -n argo-events > helm-argo-events-values.yaml
+helm get values argo-workflows -n argo-events > helm-argo-workflows-values.yaml
+helm get values argo-rollouts -n argo-rollouts > helm-argo-rollouts-values.yaml
+
+# Create archive
+cd D:\backups
+Compress-Archive -Path "cluster-backup-$backupDate\*" -DestinationPath "complete-backup-$backupDate.zip"
+
+# Clean up old backups (keep last 7 days)
+Get-ChildItem -Path D:\backups -Filter "*.zip" | Where-Object { $_.CreationTime -lt (Get-Date).AddDays(-7) } | Remove-Item
+
+Write-Host "Backup completed: complete-backup-$backupDate.zip"
+-------------------------------------------------
+
+Schedule this script to run daily:
+	- Windows Task Scheduler
+	- Run: powershell.exe -ExecutionPolicy Bypass -File D:\scripts\backup-cluster.ps1
 
 
 
