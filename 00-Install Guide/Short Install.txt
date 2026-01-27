@@ -556,143 +556,6 @@ From the folder location create Docker secret
 
 
 
-Install MinIO artifacts storage with Helm
-=============================================
-
-MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
-
-Prerequisites
-	- kubectl CLI tool
-	- Helm CLI tool
-
-MinIO shared storage service that can be used by workflows in any namespace. It is commonly used module that is installed in 'argo' namespace as Argo Workflows and should be separated from the workload namespaces in our cluster.
-
-INSTALL MINIO WIHT HELM
------------------------
-1. Install MinIO helm repository on our PC
-	terminal --> helm repo add minio https://charts.min.io/
-	terminal --> helm repo update
-
-
-2. Install MinIO chart
-	terminal --> helm install argo-artifacts minio/minio --set resources.requests.memory=512Mi --set replicas=1 --set persistence.enabled=false --set mode=standalone --set rootUser=admin --set rootPassword=password123 --set buckets[0].name=my-bucket --set buckets[0].policy=none --set buckets[0].purge=false -n argo
-
-
-3. Create credentials secret in working namespace
-	terminal --> k create secret generic my-minio-cred --from-literal=access-key=admin --from-literal=secret-key=password123 -n argo-events
-
-	# result: secret/my-minio-cred created
-
-
-4. Set Ingress controller for MinIO to be externally accessed 
-
-minio-ingress.yaml
--------------------------------------------------
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: minio-console-ingress
-  namespace: argo
-spec:
-  ingressClassName: nginx
-  rules:
-  - host: minio.localhost
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: argo-artifacts-minio-console
-            port:
-              number: 9001
--------------------------------------------------
-
-Apply the ingress manifest
-	terminal --> k apply -f minio-ingress.yaml -n argo
-
-	# result: ingress.networking.k8s.io/minio-console-ingress created
-
-	
-Add host address to Windows host list on Windows
-	- Open power Shell as Admin
-		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
-		- add '127.0.0.1 minio.localhost'
-		- save the file and exit
-
-Add host address to Windows host list on Linux
-	terminal --> sudo vim /etc/hosts
-	- Add '127.0.0.1 minio.localhost'
-	- save changes and exit - escape, :wq!, enter
-
-
-ACCESS MINIO
-------------
-
-Decode the username (rootUser) with shell
-	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootUser}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
-
-	# result: admin
-
-Decode the password (rootPassword) with shell
-	terminal --> kubectl get secret argo-artifacts-minio -n argo -o jsonpath='{.data.rootPassword}' | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_.Trim())) }
-
-	# result: password123
-
-
-Access the MinIO app on http://minio.localhost:32073/login
-	- admin
-	- password123
-
-We can create bucket if we haven't with the installation command.
-Create a bucket named 'my-bucket'. We will store our artifacts in this bucket.
-
-
-USE MINIO
----------
-To use artifacts we need to configure MinIO repository to store the artifacts from the working namespace. MinIO repository is configured in minio-artifact-repo-cm.yaml configmap file below.
-
-minio-artifact-repo-cm.yam
--------------------------------------------------
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  # If you want to use this config map by default, name it "artifact-repositories". Otherwise, you can provide a reference to a
-  # different config map in `artifactRepositoryRef.configMap` in the workflow.
-  name: artifact-repository           # this name is not the default name
-  annotations:
-    # v3.0 and after - if you want to use a specific key, put that key into this annotation.
-    workflows.argoproj.io/default-artifact-repository: minio-artifact-repo
-data:
-  minio-artifact-repo: |
-    s3:
-      bucket: my-bucket
-      endpoint: argo-artifacts-minio.argo:9000
-      insecure: true
-      accessKeySecret:
-        name: my-minio-cred
-        key: access-key 
-      secretKeySecret:
-        name: my-minio-cred
-        key: secret-key
--------------------------------------------------
-
-Create the configmap into the working namespace
-	terminal --> kubectl apply -f minio-artifact-repo-cm.yaml -n argo-events
-
-	# result: configmap/artifact-repository created
-
-Confirm ConfigMap creation
-	terminal --> kubectl get configmap artifact-repository -n <namespace>
-
-	# result:
-	NAME                  DATA   AGE
-	artifact-repository   1      104m
-
-
-
-
-
 GENERATE GITHUB CREDENTIALS
 ---------------------------
 
@@ -965,6 +828,94 @@ From the folder location create Docker secret
 	terminal --> kubectl create secret generic docker-config-secret --from-file=config.json=./docker-config.json -n argo-events
 
 	# result: secret/docker-config-secret created
+
+
+
+
+22. INSTALL NGROK
+=================
+We will expose our PC with public domain with ngrok. Download ngrok - https://dashboard.ngrok.com/get-started
+
+Download ngrok for Windows 64bit and extract it in C:\Users\your_user\ngrok.exe
+
+Set Path to the Environment Variables - open power shell as administrator
+	admin terminal --> $oldPath = [Environment]::GetEnvironmentVariable("Path", "User")
+	admin terminal --> [Environment]::SetEnvironmentVariable("Path", "$oldPath;C:\Users\your-user", "User")   # change user
+
+Test ngrok installation
+	terminal --> ngrok version
+	terminal --> Get-Command ngrok
+
+	# result: ngrok version 3.35.0
+	# result: Application     ngrok  3.35.0     C:\Users\your-user\ngrok.exe
+	
+
+Run the following command to add your authtoken to the default ngrok.yml configuration file.
+	terminal --> ngrok config add-authtoken xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+We will use this command later to expose our PC with the command
+	terminal --> ngrok http 32073					# USE LATER !!!
+
+Copy the address shown in the next section to set it in the Argo event-source.yaml manifest.
+
+To prevent usage of the domain in by external requests we will set additional webhook secret.
+
+
+
+
+
+
+
+
+Deploy analysis application
+---------------------------
+
+1. Build and load analysis appplycation on the cluster
+	Navigate to the canary-analysis\analysis-app folder and build the image
+		trminal --> docker build -t web-analysis .
+
+	Load the image into the cluster
+		terminal --> kind load docker-image web-analysis --name kind
+
+
+2. Create canary-analysis namespace
+	terminal --> k create ns canary-analysis
+
+	# result: namespace/canary-analysis created
+
+
+3. Deply the analysis CRD in the 'canary-analysis' namespace
+	terminal --> k apply -f canary-analysis.yaml
+
+	# result: clusteranalysistemplate.argoproj.io/success-rate created
+
+4. Apply the analysis deployment
+	terminal --> k apply -f web-analysis-deployment.yaml -n canary-analysis
+
+	# result:
+	deployment.apps/web-analysis created
+	service/web-analysis created
+
+5. Check if the serice is running
+	terminal --> kubectl get pods -n canary-analysis -l app=web-analysis
+
+	# result:
+	NAME                            READY   STATUS    RESTARTS   AGE
+	web-analysis-5f9bc64f67-2tgn6   1/1     Running   0          6m29s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
