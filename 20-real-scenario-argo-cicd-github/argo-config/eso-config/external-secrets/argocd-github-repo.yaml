@@ -1,0 +1,35 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: argocd-github-repo
+  namespace: argocd
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: openbao-secret-store
+    kind: SecretStore
+  target:
+    name: argocd-github-repo
+    creationPolicy: Owner
+    template:
+      metadata:
+        labels:
+          argocd.argoproj.io/secret-type: repository
+      data:
+        type: git
+        url: "{{ .REPO_URL_GITHUB }}"
+        username: "{{ .USERNAME_GITHUB }}"
+        password: "{{ .USER_TOKEN_GITHUB }}"
+  data:
+  - secretKey: REPO_URL_GITHUB
+    remoteRef:
+      key: github-creds
+      property: REPO_URL_GITHUB
+  - secretKey: USERNAME_GITHUB
+    remoteRef:
+      key: github-creds
+      property: USERNAME_GITHUB
+  - secretKey: USER_TOKEN_GITHUB
+    remoteRef:
+      key: github-creds
+      property: USER_TOKEN_GITHUB
