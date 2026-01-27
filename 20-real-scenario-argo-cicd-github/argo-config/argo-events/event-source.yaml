@@ -15,7 +15,7 @@ spec:
       webhook:
         endpoint: /push
         port: "12000"
-        url: https://xxxxxxxxxxxx.ngrok-free.app                    # Must be publicly accessible! Change when ngrok restarts
+        url: https://ccb8b937142a.ngrok-free.app                    # Must be publicly accessible! Change when ngrok restarts
         # GitHub webhooks MUST reach a public endpoint
         # Options:
         # 1. Use ngrok: http://your-ngrok-url.ngrok.io
