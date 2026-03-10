@@ -384,12 +384,17 @@ Create Nexus repository - example usage
 
  
 
-Configure Docker Desktop to communicate with the created repository
+Configure Argo Workflows to pull/push images from/to Nexus
+----------------------------------------------------------
+
+We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
+
+Configure Argo Workflows to communicate with Nexus repository
 	- Open Docker/Settings/Docker Engine
 	- Add
 	-------------------------------------------------
 	{
-	  "insecure-registries": ["localhost:8085"]
+	  "insecure-registries": ["localhost:8085", "host.docker.internal:8085"]
 	}
 	-------------------------------------------------
 	- Apply and Restart
@@ -411,22 +416,6 @@ Test Docker connection with Nexus by pushing the image created earlier
 		- Then navigate to v2/argo-demo/nginx/tags
 
 
-
-
-Configure Argo Workflows to pull/push images from/to Nexus
-----------------------------------------------------------
-
-We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
-
-Configure Argo Workflows to communicate with Nexus repository
-	- Open Docker/Settings/Docker Engine
-	- Add
-	-------------------------------------------------
-	{
-	  "insecure-registries": ["localhost:8085", "host.docker.internal:8085"]
-	}
-	-------------------------------------------------
-	- Apply and Restart
 
 
 
@@ -903,6 +892,23 @@ Deploy analysis application
 	web-analysis-5f9bc64f67-2tgn6   1/1     Running   0          6m29s
 
 
+
+Install Argo Events Core Components (in order)
+==============================================
+
+1. Install Argo Events CRDs and components:
+	terminal --> kubectl create namespace argo-events
+	terminal --> kubectl apply -f https://github.com/argoproj/argo-events/releases/latest/download/install.yaml
+
+2. Install the eventbus (required for sensors to work):
+	terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/stable/examples/eventbus/native.yaml
+
+3. Verify pods are running:
+	terminal --> kubectl get pods -n argo-events
+
+4. Create a service account with RBAC settings to allow the sensor to trigger workflows, and allow workflows to function.
+	terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/sensor-rbac.yaml
+	terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/workflow-rbac.yaml
 
 
 
