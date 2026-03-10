@@ -1,0 +1,7 @@
+{
+  "auths": {
+    "host.docker.internal:8085": {
+      "auth": "YWRtaW46YWRtaW4xMjM="
+    }
+  }
+}
