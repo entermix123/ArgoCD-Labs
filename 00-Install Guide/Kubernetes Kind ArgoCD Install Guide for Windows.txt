@@ -7,13 +7,13 @@ We need to install evironment tools depending on what kind of setup we will use 
 We will work with Power Shell CLI for each terminal command included in the instructions.
 
 We will go true installing lightweight setup on Windows 11 with:
-	1. Docker - container management application
+	1. Docker Desktop - container management application
 	2. Kind - application that uses Docker to manage Kubernetes clusters with containers
 	3. Kubectl - Kubernetes CLI 
 	4. Install Terraform
 	5. Helm - Kubernetes extension that help managing manifest files in Kuberentes clusters
 	6. Create Kuberentes Cluster with Kind
-	7. install ArgoCD
+	7. install ArgoCD, ArgoCD CLI
 	8. Install Argo Rollouts and Kargo CLI
 	9. Create second Kubernetes Kind cluster
 	10. Adding the second clusters to ArgoCD
@@ -44,8 +44,8 @@ Backup Kind CLuster
 
 
 
-1. Istall Docker on Windows
-===========================
+1. Istall Docker Desktop on Windows
+===================================
 Register, download and install Docker - https://www.docker.com/products/docker-desktop/
 
 
@@ -472,7 +472,7 @@ Confirm ArgoCD deployment
 
 	# result:
 	NAME            CLASS   HOSTS       ADDRESS     PORTS     AGE
-	argocd-server   nginx   localhost   localhost   80, 443   2m8s		# Wait ADDRESS to appear
+	argocd-server   nginx   localhost   localhost   80, 443   2m8s	  # Wait ADDRESS to appear
 
 Set default  namespace in the main cluster
 	terminal --> kubectl config set-context kind-kind --namespace=argocd
@@ -484,11 +484,24 @@ Find the password of admin user of ArgoCD
 
 	# result: password
 
+Install ArgoCD CLI
+------------------
+	terminal --> $version = (Invoke-RestMethod https://api.github.com/repos/argoproj/argo-cd/releases/latest).tag_name
+	terminal --> Invoke-WebRequest -Uri "https://github.com/argoproj/argo-cd/releases/download/$version/argocd-windows-amd64.exe" -OutFile "argocd.exe"
+
+Then move it to a folder that's in your PATH,
+	terminal --> Move-Item argocd.exe "C:\Users\user_name\.bin\argocd.exe"	# change username
+
+
 Connect to the Node with ArgoCD CLI
 	terminal --> argocd login argocd.localhost:32074 --insecure --grpc-web --username admin --password <password>
 	or
 	terminal --> argocd login argocd.localhost:32074 --insecure --grpc-web --username admin
 	terminal --> password
+
+	# result
+ 	'admin:login' logged in successfully
+	Context 'argocd.localhost:32074' updated
 
 Confirm default namespace config
 	terminal --> argocd cluster list
@@ -685,7 +698,7 @@ Add the binary to PATH
 Set Alias for kubectl-argo-rollouts:
 ------------------------------------
 Open Power Shell profile AS ADMIN and set alias below. 
-	terminal --> code $PROFILE
+	terminal --> notepad $PROFILE
 
 -----------------------------------------------------
 # Alias for kubectl
@@ -1652,14 +1665,28 @@ Create Nexus repository - example usage
 
  
 
-Configure Docker Desktop to communicate with the created repository
+Configure Argo Workflows to pull/push images from/to Nexus
+----------------------------------------------------------
+
+We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
+
 	- Open Docker/Settings/Docker Engine
 	- Add
-	-------------------------------------------------
-	{
-	  "insecure-registries": ["localhost:8085"]
-	}
-	-------------------------------------------------
+-------------------------------------------------
+{
+  "builder": {
+    "gc": {
+      "defaultKeepStorage": "20GB",
+      "enabled": true
+    }
+  },
+  "experimental": false,
+  "insecure-registries": [			# added 
+    "localhost:8085",				# added 
+    "host.docker.internal:8085"			# added - argocd pull images
+  ]
+}
+-------------------------------------------------
 	- Apply and Restart
 
 
@@ -1670,31 +1697,17 @@ Test Docker connection with Nexus by pushing the image created earlier
 		terminal --> admin
 		terminal --> nexsus_password
 
-	Retag (rename) and push the image we created earlier to the Nexus repository
-		terminal --> docker tag nginx:v1 host.docker.internal:8085/argo-demo/nginx:alpine
-		terminal --> docker push host.docker.internal:8085/argo-demo/nginx:alpine
+	Download small image 
+		terminal --> docker pull hello-world
+
+	Push the image we created earlier to the Nexus repository
+		terminal --> docker tag hello-world host.docker.internal:8085/argo-demo/hello-world:alpine
+		terminal --> docker push host.docker.internal:8085/argo-demo/hello-world:alpine
 
 	The image should be visualized in the Nexus repository
 		- Go to http://localhost:8081/#browse/browse
-		- Then navigate to v2/argo-demo/nginx/tags
-
-
-
-
-Configure Argo Workflows to pull/push images from/to Nexus
-----------------------------------------------------------
-
-We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
-
-Configure Argo Workflows to communicate with Nexus repository
-	- Open Docker/Settings/Docker Engine
-	- Add
-	-------------------------------------------------
-	{
-	  "insecure-registries": ["localhost:8085", "host.docker.internal:8085"]
-	}
-	-------------------------------------------------
-	- Apply and Restart
+		- Then navigate to v2/argo-demo/hello-world/tags
+			- we should see 'alpine' version
 
 
 
@@ -1950,7 +1963,7 @@ Create the configmap into the working namespace
 	# result: configmap/artifact-repository created
 
 Confirm ConfigMap creation
-	terminal --> kubectl get configmap artifact-repository -n <namespace>
+	terminal --> kubectl get configmap artifact-repository -n argo-events
 
 	# result:
 	NAME                  DATA   AGE
@@ -2305,6 +2318,23 @@ Create argo-demo folder and clone the 2 folders from the repo:
 17. Deploy Argo SetUp
 =====================
 
+Install Argo Events CRDs
+------------------------
+
+1. Install Argo Events CRDs and components:
+	terminal --> kubectl create namespace argo-events
+	terminal --> kubectl apply -f https://github.com/argoproj/argo-events/releases/latest/download/install.yaml
+
+2. Install the eventbus (required for sensors to work):
+	terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/stable/examples/eventbus/native.yaml
+
+3. Verify pods are running:
+	terminal --> kubectl get pods -n argo-events
+
+4. Create a service account with RBAC settings to allow the sensor to trigger workflows, and allow workflows to function.
+	terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/sensor-rbac.yaml
+	terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/master/examples/rbac/workflow-rbac.yaml
+
 
 argo-events
    |-- event-source.yaml
@@ -2389,7 +2419,6 @@ Add host address to Windows host list on Linux
 	- save changes and exit - escape, :wq!, enter
 
 We can test our the webhook endpoint on http://argo.events:32073
-
 
 
 
@@ -3246,14 +3275,28 @@ Create Nexus repository - example usage
 
  
 
-Configure Docker Desktop to communicate with the created repository
+Configure Argo Workflows to pull/push images from/to Nexus
+----------------------------------------------------------
+
+We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
+
 	- Open Docker/Settings/Docker Engine
 	- Add
-	-------------------------------------------------
-	{
-	  "insecure-registries": ["localhost:8085"]
-	}
-	-------------------------------------------------
+-------------------------------------------------
+{
+  "builder": {
+    "gc": {
+      "defaultKeepStorage": "20GB",
+      "enabled": true
+    }
+  },
+  "experimental": false,
+  "insecure-registries": [			# added 
+    "localhost:8085",				# added 
+    "host.docker.internal:8085"			# added - argocd pull images
+  ]
+}
+-------------------------------------------------
 	- Apply and Restart
 
 
@@ -3264,32 +3307,17 @@ Test Docker connection with Nexus by pushing the image created earlier
 		terminal --> admin
 		terminal --> nexsus_password
 
-	Retag (rename) and push the image we created earlier to the Nexus repository
-		terminal --> docker tag nginx:v1 host.docker.internal:8085/argo-demo/nginx:alpine
-		terminal --> docker push host.docker.internal:8085/argo-demo/nginx:alpine
+	Download small image 
+		terminal --> docker pull hello-world
+
+	Push the image we created earlier to the Nexus repository
+		terminal --> docker tag hello-world host.docker.internal:8085/argo-demo/hello-world:alpine
+		terminal --> docker push host.docker.internal:8085/argo-demo/hello-world:alpine
 
 	The image should be visualized in the Nexus repository
 		- Go to http://localhost:8081/#browse/browse
-		- Then navigate to v2/argo-demo/nginx/tags
-
-
-
-
-Configure Argo Workflows to pull/push images from/to Nexus
-----------------------------------------------------------
-
-We need to allow Argo Workflows communication in the Docker Engine Settings to be able to access Nexus platofrm. In this case we are using Docker Desktop and we add the internal Docker host address and the port of the Nexus repository.
-
-Configure Argo Workflows to communicate with Nexus repository
-	- Open Docker/Settings/Docker Engine
-	- Add
-	-------------------------------------------------
-	{
-	  "insecure-registries": ["localhost:8085", "host.docker.internal:8085"]
-	}
-	-------------------------------------------------
-	- Apply and Restart
-
+		- Then navigate to v2/argo-demo/hello-world/tags
+			- we should see 'alpine' version
 
 
 Configure Argo Workflows to pull images from Nexus
@@ -3556,7 +3584,7 @@ Confirm ConfigMap creation
 
 21. INSTALL NGROK
 =================
-We will expose our PC with public domain with ngrok. Download ngrok - https://dashboard.ngrok.com/get-started
+We will expose our PC with public domain with ngrok. Download ngrok - https://dashboard.ngrok.com/
 
 Download ngrok for Windows 64bit and extract it in C:\Users\your_user\ngrok.exe
 
@@ -3728,6 +3756,20 @@ spec:
 
 ARGO EVENTS
 -----------
+
+Install Core Components (in order)
+==================================
+
+1. Install Argo Events CRDs and components:
+	terminal --> kubectl create namespace argo-events
+	terminal --> kubectl apply -f https://github.com/argoproj/argo-events/releases/latest/download/install.yaml
+
+2. Install the eventbus (required for sensors to work):
+	terminal --> kubectl apply -n argo-events -f https://raw.githubusercontent.com/argoproj/argo-events/stable/examples/eventbus/native.yaml
+
+3. Verify pods are running:
+	terminal --> kubectl get pods -n argo-events
+
 
 |--argo-events
    |-- event-source.yaml
@@ -4263,12 +4305,12 @@ spec:
 Add host address to Windows host list
 	- Open PowerShell as Admin
 		terminal --> notepad C:\Windows\System32\drivers\etc\hosts
-		- add '127.0.0.1 argo-demo'
+		- add '127.0.0.1 argo.demo'
 		- save the file and exit
 
 Add host address to Linux host list
 	terminal --> sudo vim /etc/hosts
-	- Add '127.0.0.1 argo-demo'
+	- Add '127.0.0.1 argo.demo'
 	- save changes and exit - escape, :wq!, enter
 
 After the rollout is created the app should be accessabel on http://argo.demo:32073/
@@ -4425,7 +4467,7 @@ Apply the event source CRD
 	# result: sensor.argoproj.io/ci created
 
 Apply the sensor CRD
-	terminal --> kubectl apply -f argo-app.yaml
+	terminal --> kubectl apply -f sensor.yaml
 
 	# result: application.argoproj.io/argo-demo-application created
 
